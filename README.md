@@ -1422,34 +1422,34 @@ gantt
 
 ### Core Insurance Lifecycle
 
-- [ ] 4-step registration with H3 hex auto-assignment
-- [ ] Policy creation with all 11 IRDAI exclusions embedded
-- [ ] ATHÉNA ML premium with RF feature importance + SHAP per-prediction explanations
-- [ ] Bayesian online pricing updates after each claim event
-- [ ] Zero-touch claim flow: trigger → 4-layer ARGUS fraud check → UPI payout → SMS
-- [ ] All 7 triggers implemented and simulatable via admin UI
-- [ ] BCR dashboard with 0.55–0.70 target band and auto-suspend at > 0.85
-- [ ] 80% immediate payout for soft-flagged workers
+- [X] 4-step registration with H3 hex auto-assignment
+- [X] Policy creation with all 11 IRDAI exclusions embedded
+- [X] ATHÉNA ML premium with RF feature importance + SHAP per-prediction explanations
+- [X] Bayesian online pricing updates after each claim event
+- [X] Zero-touch claim flow: trigger → 4-layer ARGUS fraud check → UPI payout → SMS
+- [X] All 7 triggers implemented and simulatable via admin UI
+- [X] BCR dashboard with 0.55–0.70 target band and auto-suspend at > 0.85
+- [X] 80% immediate payout for soft-flagged workers
 
 ### AI/ML (5 Systems)
 
-- [ ] Random Forest Regressor with 7 features + SHAP TreeExplainer
-- [ ] Bayesian Beta-Binomial online trigger probability updates
-- [ ] 7-Signal Trust Score Engine (cell tower, GPS, motion, Wi-Fi, battery, network, platform)
-- [ ] Isolation Forest anomaly detection on 6-feature claim vectors
-- [ ] DBSCAN collusion ring detection on co-occurrence matrix
-- [ ] Regional Z-Score correlation per H3 hex
-- [ ] Monte Carlo trigger calibration (10K simulations)
-- [ ] Holt-Winters exponential smoothing for 7-day peril forecast
-- [ ] Monte Carlo stress test with 90% CI (PYTHIA)
-- [ ] Prophet liquidity forecasting (bootstrapped with rule-based reserves)
+- [X] Random Forest Regressor with 7 features + SHAP TreeExplainer
+- [X] Bayesian Beta-Binomial online trigger probability updates
+- [X] 7-Signal Trust Score Engine (cell tower, GPS, motion, Wi-Fi, battery, network, platform)
+- [X] Isolation Forest anomaly detection on 6-feature claim vectors
+- [X] DBSCAN collusion ring detection on co-occurrence matrix
+- [X] Regional Z-Score correlation per H3 hex
+- [X] Monte Carlo trigger calibration (10K simulations)
+- [X] Holt-Winters exponential smoothing for 7-day peril forecast
+- [X] Monte Carlo stress test with 90% CI (PYTHIA)
+- [X] Prophet liquidity forecasting (bootstrapped with rule-based reserves)
 
 ### Deployment & Demo
 
-- [ ] Source code with `docker-compose up` — evaluators run in < 5 minutes
-- [ ] Seed data script loads 10 years of ward-level weather/AQI (synthetic but realistic)
-- [ ] All ML models auto-train on synthetic data at startup — no external dependencies
-- [ ] 2-min demo video (public URL)
+- [X] Source code with `docker-compose up` — evaluators run in < 5 minutes
+- [X] Seed data script loads 10 years of ward-level weather/AQI (synthetic but realistic)
+- [X] All ML models auto-train on synthetic data at startup — no external dependencies
+- [X] 2-min demo video (public URL)
 
 ---
 
@@ -1501,8 +1501,7 @@ gantt
 
 | Resource | Link |
 | :---: | --- |
-| 🎬 **Demo Video (Phase 2)** | *[Coming Soon]* |
-| 🎬 **Demo Video (Phase 1)** | [Google Drive — Phase 1 Video](https://drive.google.com/drive/folders/1mUh3e1g5_D2iPK3s0-t4NgtCyY4PbVQE?usp=drive_link) |
+| 🎬 **Demo Video (Phase 2)** | [Google Drive — Phase 2 Video](https://drive.google.com/drive/folders/1mUh3e1g5_D2iPK3s0-t4NgtCyY4PbVQE?usp=drive_link) |
 
 ---
 
