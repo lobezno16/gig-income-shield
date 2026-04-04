@@ -1,0 +1,244 @@
+/* ===== GigShield Premium Design System ===== */
+:root {
+  /* Colors — solid premium palette */
+  --bg-primary: #08080f;
+  --bg-secondary: #0e0e1a;
+  --bg-card: rgba(255,255,255,0.035);
+  --bg-glass: rgba(255,255,255,0.05);
+  --bg-glass-strong: rgba(255,255,255,0.08);
+
+  --violet: #8b5cf6;
+  --violet-glow: rgba(139,92,246,0.25);
+  --cyan: #22d3ee;
+  --cyan-glow: rgba(34,211,238,0.2);
+  --green: #34d399;
+  --green-glow: rgba(52,211,153,0.2);
+  --red: #f87171;
+  --red-glow: rgba(248,113,113,0.2);
+  --amber: #fbbf24;
+  --amber-glow: rgba(251,191,36,0.2);
+
+  --text-primary: #f0f0f5;
+  --text-secondary: #a0a0b8;
+  --text-muted: #5a5a72;
+
+  /* Typography */
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-heading: 'Outfit', 'Inter', system-ui, sans-serif;
+
+  /* Spacing */
+  --section-pad: clamp(3rem, 8vw, 6rem) clamp(1rem, 5vw, 4rem);
+
+  /* Borders */
+  --border: 1px solid rgba(255,255,255,0.07);
+  --border-glass: 1px solid rgba(255,255,255,0.1);
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --radius-full: 9999px;
+}
+
+/* ===== Reset ===== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+body {
+  font-family: var(--font);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Subtle noise texture overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+  background-size: 256px;
+}
+
+/* ===== Glassmorphism Utilities ===== */
+.glass {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: var(--border-glass);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.glass-strong {
+  background: var(--bg-glass-strong);
+  backdrop-filter: blur(32px) saturate(1.6);
+  -webkit-backdrop-filter: blur(32px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.13);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 32px rgba(0,0,0,0.3);
+}
+
+.glow-violet { box-shadow: 0 0 30px var(--violet-glow), inset 0 1px 0 rgba(255,255,255,0.04); }
+.glow-cyan { box-shadow: 0 0 30px var(--cyan-glow), inset 0 1px 0 rgba(255,255,255,0.04); }
+.glow-green { box-shadow: 0 0 30px var(--green-glow), inset 0 1px 0 rgba(255,255,255,0.04); }
+
+/* ===== Section Defaults ===== */
+.section {
+  min-height: 100vh;
+  padding: var(--section-pad);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.section-title {
+  font-family: var(--font-heading);
+  font-size: clamp(1.8rem, 5vw, 3rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+  text-align: center;
+  margin-bottom: 1rem;
+}
+
+.section-subtitle {
+  font-size: clamp(0.95rem, 2vw, 1.15rem);
+  color: var(--text-secondary);
+  text-align: center;
+  max-width: 560px;
+  margin-bottom: 3rem;
+}
+
+/* Accent text — solid color, no gradients */
+.accent-text {
+  color: var(--violet);
+}
+
+.accent-text-green {
+  color: var(--green);
+}
+
+.accent-text-cyan {
+  color: var(--cyan);
+}
+
+/* Keep gradient-text class names for backwards compat but use solid colors */
+.gradient-text {
+  color: var(--violet);
+  -webkit-text-fill-color: var(--violet);
+}
+
+.gradient-text-green {
+  color: var(--green);
+  -webkit-text-fill-color: var(--green);
+}
+
+/* ===== Bento Grid Utility ===== */
+.bento-grid {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+
+/* ===== Keyframes ===== */
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes rain-drop {
+  0% { transform: translateY(-10vh) translateX(0); opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.4; }
+  100% { transform: translateY(110vh) translateX(20px); opacity: 0; }
+}
+
+@keyframes success-pulse {
+  0% { box-shadow: 0 0 0 0 var(--green-glow); }
+  70% { box-shadow: 0 0 0 20px rgba(52,211,153,0); }
+  100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
+
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-primary); }
+::-webkit-scrollbar-thumb { background: rgba(139,92,246,0.25); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(139,92,246,0.45); }
+
+/* ===== Rain Overlay ===== */
+.rain-container {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.rain-drop {
+  position: absolute;
+  width: 1.5px;
+  height: 20px;
+  background: rgba(34,211,238,0.2);
+  animation: rain-drop linear infinite;
+  border-radius: 2px;
+}
+
+/* ===== Phone Mockup ===== */
+.phone-frame {
+  width: 280px;
+  max-width: 90vw;
+  border-radius: var(--radius-xl);
+  border: 1.5px solid rgba(255,255,255,0.1);
+  background: rgba(8,8,15,0.92);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 1.2rem;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.phone-notch {
+  width: 100px;
+  height: 24px;
+  background: #000;
+  border-radius: 0 0 14px 14px;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  .section { padding: 2.5rem 1rem; }
+  .phone-frame { width: 260px; }
+}
+
+@media (min-width: 1024px) {
+  .section { padding: 5rem 4rem; }
+}

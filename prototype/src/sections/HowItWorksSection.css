@@ -1,0 +1,63 @@
+.how-section {
+  background: var(--bg-primary);
+}
+
+.how-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+  margin-top: 1rem;
+  max-width: 760px;
+  width: 100%;
+}
+
+.how-step-wrapper {
+  display: flex;
+  flex-direction: column;
+}
+
+.how-card {
+  width: 100%;
+  text-align: center;
+  padding: 2rem 1.5rem;
+}
+
+.how-icon {
+  margin-bottom: 12px;
+  filter: drop-shadow(0 0 12px currentColor);
+}
+
+.how-step-num {
+  font-family: var(--font-heading);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  margin-bottom: 6px;
+}
+
+.how-step-title {
+  font-family: var(--font-heading);
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.how-step-desc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* Connectors hidden in bento grid */
+.how-connector {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .how-steps {
+    grid-template-columns: 1fr;
+    gap: 16px;
+    max-width: 300px;
+  }
+  .how-card { width: 100%; }
+}
