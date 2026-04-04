@@ -1,0 +1,2 @@
+"""Soteria backend package."""
+

@@ -1519,3 +1519,93 @@ Built with 🏛️ by **Team DevGodz** for **Guidewire DEVTrails 2026**
 ---
 
 </div>
+
+---
+
+## Phase 2 Evaluator Runbook (v2.0)
+
+### Quick Start
+
+```bash
+# from repo root
+docker-compose up --build
+```
+
+Services:
+- Frontend: `http://localhost:5173`
+- API: `http://localhost:8000`
+- Postgres/PostGIS: `localhost:5432`
+- Redis: `localhost:6379`
+
+### Demo Mode
+
+Use `?demo=true` to enable deterministic evaluator demo behavior.
+
+Worker app:
+- `http://localhost:5173/register?demo=true`
+
+Admin app:
+- `http://localhost:5173/admin?demo=true`
+
+Demo guarantees:
+- Registration pre-fills Ravi Kumar profile
+- OTP accepts any 6-digit code in demo mode
+- Dashboard shows active trigger simulation
+- Claims timeline auto-progresses in real time
+- Admin pages load BCR, fraud, heatmap and live claims feed
+
+### Evaluator Flow (8 Steps)
+
+1. Open `http://localhost:5173/register?demo=true`
+2. Complete onboarding for Ravi Kumar
+3. Open worker Dashboard (`/dashboard?demo=true`)
+4. Review Policy (`/policy?demo=true`) and Premium (`/premium?demo=true`)
+5. Fire a simulated trigger:
+   - `POST /api/triggers/simulate`
+6. Open Claims (`/claims?demo=true`) and watch timeline progression
+7. Open Admin pages (`/admin`, `/admin/bcr`, `/admin/heatmap`, `/admin/fraud`, `/admin/ml`)
+8. Run stress test:
+
+```bash
+cd backend
+python scripts/stress_test.py --scenario 14_day_monsoon
+```
+
+### Backend API Envelope
+
+All successful responses:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "meta": {
+    "request_id": "uuid",
+    "timestamp": "iso8601",
+    "version": "2.0"
+  }
+}
+```
+
+Error responses:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "...",
+    "details": {}
+  }
+}
+```
+
+### Seed + Stress Commands (local backend shell)
+
+```bash
+cd backend
+alembic upgrade head
+python scripts/seed_data.py
+python scripts/stress_test.py --all
+```
+

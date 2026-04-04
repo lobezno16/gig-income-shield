@@ -1,0 +1,91 @@
+:root {
+  --font-display: "Sora", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-base: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  --text-2xl: 32px;
+  --text-3xl: 48px;
+
+  --bg-base: #0a0a0a;
+  --bg-surface: #111111;
+  --bg-elevated: #1a1a1a;
+  --bg-border: #2a2a2a;
+
+  --text-primary: #f5f5f5;
+  --text-secondary: #9a9a9a;
+  --text-disabled: #4a4a4a;
+
+  --accent: #5b4fff;
+  --accent-dim: #2a2466;
+  --success: #00d97e;
+  --warning: #f5a623;
+  --danger: #ff3b3b;
+  --info: #3b9eff;
+
+  --gold: #d4a017;
+  --silver: #9a9a9a;
+  --bronze: #cd7f32;
+  --aqi: #9b59b6;
+  --rain: #3498db;
+  --heat: #e74c3c;
+  --flood: #1abc9c;
+  --storm: #f39c12;
+  --curfew: #e67e22;
+  --store: #95a5a6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-display);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.surface {
+  background: var(--bg-surface);
+  border: 1px solid var(--bg-border);
+  border-radius: 4px;
+}
+
+.status-badge {
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid var(--bg-border);
+  padding: 4px 8px;
+}
+
+.touch-target {
+  min-height: 60px;
+}
+
+.pulse {
+  animation: pulse-ring 1.8s infinite;
+}
+
+@keyframes pulse-ring {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
