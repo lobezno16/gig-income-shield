@@ -1553,6 +1553,18 @@ Demo guarantees:
 - Claims timeline auto-progresses in real time
 - Admin pages load BCR, fraud, heatmap and live claims feed
 
+### Install As Application (PWA)
+
+Soteria now supports installable app mode on desktop and mobile:
+- Open `http://localhost:5173`
+- In Chrome/Edge, click **Install App** when prompted
+- On iPhone/iPad Safari, use **Share -> Add to Home Screen**
+
+Installed app behavior:
+- Standalone launch (app window, no browser chrome)
+- Home-screen icon and app metadata
+- Offline shell fallback via service worker cache
+
 ### Evaluator Flow (8 Steps)
 
 1. Open `http://localhost:5173/register?demo=true`

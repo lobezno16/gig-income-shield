@@ -8,6 +8,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from dependencies import require_admin
 from models import Claim, ClaimStatus, Policy, PremiumRecord, Worker
 from response import error_response, request_id_from_request, success_response
 from services.pythia.stress_test import SCENARIOS
@@ -22,7 +23,7 @@ class ClaimOverrideRequest(BaseModel):
 
 
 @router.post("/retrain-model")
-async def retrain_model(request: Request):
+async def retrain_model(request: Request, _admin: Worker = Depends(require_admin)):
     request_id = request_id_from_request(request)
     artifacts = train_models("./ml/models")
     return success_response(
@@ -32,8 +33,14 @@ async def retrain_model(request: Request):
 
 
 @router.get("/workers")
-async def list_workers(page: int = 1, page_size: int = 20, request: Request | None = None, db: AsyncSession = Depends(get_db)):
-    request_id = request_id_from_request(request) if request else "admin-workers"
+async def list_workers(
+    request: Request,
+    _admin: Worker = Depends(require_admin),
+    page: int = 1,
+    page_size: int = 20,
+    db: AsyncSession = Depends(get_db),
+):
+    request_id = request_id_from_request(request)
     offset = (page - 1) * page_size
     items = (await db.execute(select(Worker).order_by(desc(Worker.created_at)).offset(offset).limit(page_size))).scalars().all()
     total = int((await db.execute(select(func.count(Worker.id)))).scalar_one())
@@ -61,7 +68,7 @@ async def list_workers(page: int = 1, page_size: int = 20, request: Request | No
 
 
 @router.get("/fraud-alerts")
-async def fraud_alerts(request: Request, db: AsyncSession = Depends(get_db)):
+async def fraud_alerts(request: Request, _admin: Worker = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     request_id = request_id_from_request(request)
     rows = (
         await db.execute(
@@ -87,7 +94,13 @@ async def fraud_alerts(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/claims/{claim_id}/override")
-async def override_claim(claim_id: str, payload: ClaimOverrideRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def override_claim(
+    claim_id: str,
+    payload: ClaimOverrideRequest,
+    request: Request,
+    _admin: Worker = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
     claim = (await db.execute(select(Claim).where(Claim.id == claim_id))).scalar_one_or_none()
     if not claim:
@@ -109,4 +122,3 @@ async def override_claim(claim_id: str, payload: ClaimOverrideRequest, request: 
         },
         request_id=request_id,
     )
-

@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkerBase(BaseModel):
@@ -40,13 +40,8 @@ class OtpSendRequest(BaseModel):
 
 
 class OtpVerifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     phone: str = Field(..., pattern=r"^\+91[6-9]\d{9}$")
     otp: str = Field(..., min_length=6, max_length=6)
-    demo_mode: bool = False
-
-
-class TokenResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
-    expires_in_seconds: int = 3600
-
+    otp_token: str

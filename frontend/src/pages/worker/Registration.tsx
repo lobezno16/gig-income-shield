@@ -82,6 +82,9 @@ export function RegistrationPage() {
       patch({ phone: values.phone });
       const response = await sendOtp(values.phone);
       patch({ otpToken: response.data.otp_token });
+      if (response.data.mock_otp) {
+        phoneForm.setValue("otp", response.data.mock_otp);
+      }
       setOtpSent(true);
       setCounter(60);
       const timer = window.setInterval(() => {
@@ -103,13 +106,35 @@ export function RegistrationPage() {
     const values = phoneForm.getValues();
     const valid = await phoneForm.trigger();
     if (!valid) return;
+    if (!data.otpToken) {
+      setError("Request OTP first.");
+      return;
+    }
     try {
-      const response = await verifyOtp(values.phone, values.otp, demoMode);
-      localStorage.setItem("soteria_access_token", response.data.access_token);
+      const response = await verifyOtp(values.phone, values.otp, data.otpToken);
+      const workerData = response?.data;
+      if (workerData?.worker_id && workerData?.requires_enrollment === false) {
+        setCurrentWorker({
+          id: workerData.worker_id,
+          name: workerData.name ?? values.phone,
+          phone: values.phone,
+          platform: data.platform,
+          city: data.city,
+          h3_hex: data.h3Hex,
+          upi_id: data.upiId || "pending@ybl",
+          tier: "silver",
+          active_days_30: 12,
+          plan: data.plan,
+          weekly_premium: 35,
+          max_payout_week: 700,
+        });
+        nav(`/dashboard${demoMode ? "?demo=true" : ""}`);
+        return;
+      }
       patch({ phone: values.phone, otp: values.otp });
       setStep(2);
     } catch {
-      setError(demoMode ? "Enter any 6-digit OTP in demo mode." : "Invalid OTP. Use 123456.");
+      setError("Invalid OTP. Please try again.");
     }
   }
 

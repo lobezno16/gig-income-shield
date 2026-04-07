@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { Card } from "../../design-system/components/Card";
 import { Badge } from "../../design-system/components/Badge";
+import { useAuthGuard } from "../../hooks/useAuthGuard";
 import { useWorkerStore } from "../../store/workerStore";
 import { formatHex, formatINR, formatPhone } from "../../utils/formatters";
 
@@ -22,7 +23,16 @@ const exclusions = [
 export function WorkerPolicyPage() {
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get("demo") === "true";
+  const { isAuthenticated, isLoading } = useAuthGuard();
   const { currentWorker } = useWorkerStore();
+
+  if (isLoading) {
+    return null;
+  }
+
+  if (!isAuthenticated || !currentWorker) {
+    return null;
+  }
 
   return (
     <main className="layout" style={{ maxWidth: 760 }}>
@@ -80,4 +90,3 @@ export function WorkerPolicyPage() {
     </main>
   );
 }
-

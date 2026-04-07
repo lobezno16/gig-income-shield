@@ -6,6 +6,7 @@ import { Card } from "../../design-system/components/Card";
 import { Badge } from "../../design-system/components/Badge";
 import { CLAIM_STEPS, MOCK_CLAIMS } from "../../utils/mockData";
 import { formatDateTime, formatINR } from "../../utils/formatters";
+import { useAuthGuard } from "../../hooks/useAuthGuard";
 import { useWorkerStore } from "../../store/workerStore";
 import { useClaims } from "../../hooks/useClaims";
 
@@ -21,9 +22,18 @@ const iconMap = {
 export function WorkerClaimsPage() {
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get("demo") === "true";
+  const { isAuthenticated, isLoading } = useAuthGuard();
   const { currentWorker } = useWorkerStore();
-  const query = useClaims(currentWorker.id);
+  const query = useClaims(currentWorker?.id ?? "");
   const [activeIndex, setActiveIndex] = useState(5);
+
+  if (isLoading) {
+    return null;
+  }
+
+  if (!isAuthenticated || !currentWorker) {
+    return null;
+  }
 
   useEffect(() => {
     if (!demoMode) return;
@@ -118,4 +128,3 @@ export function WorkerClaimsPage() {
     </main>
   );
 }
-

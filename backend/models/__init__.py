@@ -2,6 +2,7 @@ from models.claim import Claim, ClaimStatus
 from models.policy import PlanType, Policy, PolicyStatus, PoolConfig
 from models.premium import BCRRecord, BayesianPosterior, H3RiskProfile, PremiumRecord
 from models.trigger import PerilType, TriggerEvent, TriggerLevel
+from models.user import UserRole
 from models.worker import Platform, Worker, WorkerTier
 
 __all__ = [
@@ -19,7 +20,7 @@ __all__ = [
     "PremiumRecord",
     "TriggerEvent",
     "TriggerLevel",
+    "UserRole",
     "Worker",
     "WorkerTier",
 ]
-

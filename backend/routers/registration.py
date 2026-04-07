@@ -4,19 +4,24 @@ from datetime import datetime, timedelta, timezone
 
 import h3
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth_utils import create_access_token, create_refresh_token
 from constants import ALL_COVERED_PERILS, CITY_POOL_DEFAULTS, CITY_URBAN_TIER, DEFAULT_IRDAI_SANDBOX_ID, H3_ZONES, IRDAI_EXCLUSIONS
+from config import get_settings
 from database import get_db
-from models import PlanType, Platform, Policy, PolicyStatus, PremiumRecord, Worker, WorkerTier
+from models import PlanType, Platform, Policy, PolicyStatus, PoolConfig, PremiumRecord, Worker, WorkerTier
+from redis_client import get_redis
 from response import error_response, request_id_from_request, success_response
-from routers.auth import OTP_TOKENS
 from schemas.worker import EnrollmentRequest
 from services.athena.premium_engine import AthenaPremiumEngine
 from services.id_gen import generate_policy_number
+from services.otp_service import consume_phone_verification
 
 router = APIRouter(prefix="/api/policy", tags=["registration"])
+settings = get_settings()
 
 
 def tier_from_active_days(days: int) -> WorkerTier:
@@ -43,9 +48,15 @@ def resolve_hex_and_zone(latitude: float, longitude: float, city: str) -> tuple[
 
 
 @router.post("/enroll")
-async def enroll_worker(payload: EnrollmentRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def enroll_worker(
+    payload: EnrollmentRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    redis_client=Depends(get_redis),
+):
     request_id = request_id_from_request(request)
-    if payload.phone not in OTP_TOKENS or OTP_TOKENS[payload.phone] != payload.otp_token:
+    verified = await consume_phone_verification(payload.phone, payload.otp_token, redis_client)
+    if not verified:
         return error_response(
             code="OTP_TOKEN_INVALID",
             message="OTP token invalid or expired.",
@@ -57,6 +68,17 @@ async def enroll_worker(payload: EnrollmentRequest, request: Request, db: AsyncS
     hex_id, zone = resolve_hex_and_zone(payload.latitude, payload.longitude, city)
     pool_id = zone.get("pool", CITY_POOL_DEFAULTS.get(city, "delhi_aqi_pool"))
     urban_tier = int(zone.get("urban_tier", CITY_URBAN_TIER.get(city, 1)))
+
+    pool_cfg = (await db.execute(select(PoolConfig).where(PoolConfig.pool_id == pool_id))).scalar_one_or_none()
+    if pool_cfg and pool_cfg.is_enrollment_suspended:
+        return error_response(
+            code="POOL_SUSPENDED",
+            message=f"New enrollments are temporarily suspended for pool '{pool_id}'.",
+            details={"pool_id": pool_id, "reason": pool_cfg.suspension_reason},
+            status_code=409,
+            request_id=request_id,
+        )
+
     active_days_30 = 12
     tier = tier_from_active_days(active_days_30)
 
@@ -143,6 +165,7 @@ async def enroll_worker(payload: EnrollmentRequest, request: Request, db: AsyncS
             "id": str(worker.id),
             "name": worker.name,
             "phone": worker.phone,
+            "role": worker.role.value,
             "platform": worker.platform.value,
             "tier": worker.tier.value,
             "h3_hex": worker.h3_hex,
@@ -187,4 +210,25 @@ async def enroll_worker(payload: EnrollmentRequest, request: Request, db: AsyncS
         },
     }
 
-    return success_response(data, request_id=request_id)
+    access_token = create_access_token(subject=str(worker.id), role=worker.role.value, phone=worker.phone)
+    refresh_token = create_refresh_token(subject=str(worker.id), role=worker.role.value, phone=worker.phone)
+    response = JSONResponse(content=success_response(data, request_id=request_id))
+    response.set_cookie(
+        key="soteria_auth",
+        value=access_token,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="strict",
+        max_age=86400,
+        path="/",
+    )
+    response.set_cookie(
+        key="soteria_refresh",
+        value=refresh_token,
+        httponly=True,
+        secure=settings.environment == "production",
+        samesite="strict",
+        max_age=604800,
+        path="/auth",
+    )
+    return response

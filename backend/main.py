@@ -3,13 +3,13 @@ from __future__ import annotations
 from uuid import uuid4
 
 import structlog
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
 from config import get_settings
 from logging_config import setup_logging
+from redis_client import close_redis
 from response import error_response
 from routers import admin, analytics, auth, claims, misc, ml, policy, premium, registration, triggers
 from services.sentinelle.trigger_monitor import TriggerMonitor
@@ -24,7 +24,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, version=settings.api_version)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins + ["*"],
+        allow_origins=settings.allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -45,6 +45,17 @@ def create_app() -> FastAPI:
             message="Request validation failed.",
             details={"errors": exc.errors()},
             status_code=422,
+            request_id=getattr(request.state, "request_id", None),
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(request: Request, exc: HTTPException):
+        code = "AUTH_ERROR" if exc.status_code in {401, 403} else "HTTP_ERROR"
+        message = str(exc.detail) if isinstance(exc.detail, str) else "Request failed."
+        return error_response(
+            code=code,
+            message=message,
+            status_code=exc.status_code,
             request_id=getattr(request.state, "request_id", None),
         )
 
@@ -75,11 +86,16 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     async def on_startup():
+        if settings.environment == "production" and "*" in settings.allowed_origins:
+            raise RuntimeError("Wildcard CORS origin is not permitted in production")
         logger.info("startup", environment=settings.environment)
         trigger_monitor.start()
+
+    @app.on_event("shutdown")
+    async def on_shutdown():
+        await close_redis()
 
     return app
 
 
 app = create_app()
-

@@ -27,13 +27,6 @@ def upgrade() -> None:
     peril_type_enum = sa.Enum("aqi", "rain", "heat", "flood", "storm", "curfew", "store", name="peril_type_enum")
     claim_status_enum = sa.Enum("processing", "approved", "paid", "flagged", "blocked", name="claim_status_enum")
 
-    platform_enum.create(op.get_bind(), checkfirst=True)
-    worker_tier_enum.create(op.get_bind(), checkfirst=True)
-    policy_status_enum.create(op.get_bind(), checkfirst=True)
-    plan_type_enum.create(op.get_bind(), checkfirst=True)
-    peril_type_enum.create(op.get_bind(), checkfirst=True)
-    claim_status_enum.create(op.get_bind(), checkfirst=True)
-
     op.create_table(
         "workers",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -187,4 +180,3 @@ def downgrade() -> None:
     sa.Enum(name="policy_status_enum").drop(op.get_bind(), checkfirst=True)
     sa.Enum(name="worker_tier_enum").drop(op.get_bind(), checkfirst=True)
     sa.Enum(name="platform_enum").drop(op.get_bind(), checkfirst=True)
-

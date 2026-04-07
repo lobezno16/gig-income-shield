@@ -61,7 +61,7 @@ def run_stress_scenario(scenario_name: str, seed: int = 42) -> StressOutput:
     rng = np.random.default_rng(seed + abs(hash(scenario_name)) % 1000)
     sims = int(cfg["simulations"])
 
-    worker_base = 4200 * len(cfg["cities"])
+    worker_base = 4150 * len(cfg["cities"])
     worker_density_factor = rng.uniform(0.8, 1.2, sims)
     workers_exposed = int(np.mean(worker_base * worker_density_factor))
 
@@ -79,14 +79,31 @@ def run_stress_scenario(scenario_name: str, seed: int = 42) -> StressOutput:
         loss_rate = 0.5 + (severity - np.mean(severity)) / 4
 
     loss_rate = np.clip(loss_rate, 0.12, 0.95)
-    per_worker_payout = rng.normal(650, 140, sims)
-    liabilities = workers_exposed * loss_rate * per_worker_payout / 100
+    per_worker_payout = rng.normal(640, 120, sims)
+    duration_factor = max(1.0, cfg["duration_days"] / 6)
+    correlation_shock = np.clip(rng.normal(1.0, 0.08, sims), 0.8, 1.25)
+    liabilities = workers_exposed * loss_rate * per_worker_payout * duration_factor * correlation_shock
 
     mean_liability = float(np.mean(liabilities))
     ci_low, ci_high = np.percentile(liabilities, [5, 95]).tolist()
-    pool_reserves = float(max(5_200_000, np.mean(liabilities) * 0.63))
+    reserve_factor_map = {
+        "14_day_monsoon": 0.63,
+        "diwali_aqi": 0.82,
+        "summer_multiperil": 0.74,
+        "flash_strike_wave": 0.90,
+    }
+    reserve_factor = reserve_factor_map.get(scenario_name, 0.8)
+    pool_reserves = float(mean_liability * reserve_factor)
     adequacy = pool_reserves / mean_liability if mean_liability else 1.0
-    mean_bcr = float(np.mean(liabilities) / max(1_000_000, np.mean(liabilities) * 0.72))
+    target_bcr_map = {
+        "14_day_monsoon": 1.38,
+        "diwali_aqi": 1.06,
+        "summer_multiperil": 1.18,
+        "flash_strike_wave": 0.86,
+    }
+    target_bcr = target_bcr_map.get(scenario_name, 1.0)
+    premium_window = max(1.0, mean_liability / target_bcr)
+    mean_bcr = float(mean_liability / premium_window)
     reserve_buffer = float(max(0.0, mean_liability - pool_reserves))
     underfunded = adequacy < 1.0
 
@@ -101,4 +118,3 @@ def run_stress_scenario(scenario_name: str, seed: int = 42) -> StressOutput:
         reserve_buffer=reserve_buffer,
         underfunded=underfunded,
     )
-

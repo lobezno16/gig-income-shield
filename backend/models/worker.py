@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from database import Base
+from models.user import UserRole
 
 
 class Platform(str, enum.Enum):
@@ -38,10 +39,10 @@ class Worker(Base):
     active_days_30: Mapped[int] = mapped_column(Integer, default=0)
     total_deliveries: Mapped[int] = mapped_column(Integer, default=0)
     trust_score_floor: Mapped[float] = mapped_column(Numeric(3, 2), default=0.40)
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role_enum"), nullable=False, server_default="worker")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     policies = relationship("Policy", back_populates="worker")
     claims = relationship("Claim", back_populates="worker")
     premiums = relationship("PremiumRecord", back_populates="worker")
-

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from dependencies import get_current_worker
 from models import PlanType, Platform, Policy, PremiumRecord, Worker, WorkerTier
 from response import error_response, request_id_from_request, success_response
 from schemas.premium import PremiumCalculationRequest, PredictiveCoverageRequest
@@ -15,11 +17,26 @@ from services.athena.premium_engine import AthenaPremiumEngine
 router = APIRouter(prefix="/api/premium", tags=["premium"])
 
 
+def _is_owner(current_worker: Worker, worker_id: str) -> bool:
+    try:
+        return current_worker.id == UUID(worker_id)
+    except ValueError:
+        return False
+
+
 @router.get("/{worker_id}")
-async def get_premium(worker_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def get_premium(
+    worker_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to access this premium data.", status_code=403, request_id=request_id)
+
     worker = (await db.execute(select(Worker).where(Worker.id == worker_id))).scalar_one_or_none()
-    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalar_one_or_none()
+    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalars().first()
     if not worker or not policy:
         return error_response("NOT_FOUND", "Worker or policy not found.", status_code=404, request_id=request_id)
 
@@ -92,8 +109,16 @@ async def calculate_preview(payload: PremiumCalculationRequest, request: Request
 
 
 @router.get("/{worker_id}/history")
-async def premium_history(worker_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def premium_history(
+    worker_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to access this premium history.", status_code=403, request_id=request_id)
+
     stmt = select(PremiumRecord).where(PremiumRecord.worker_id == worker_id).order_by(desc(PremiumRecord.week_start)).limit(12)
     records = (await db.execute(stmt)).scalars().all()
     if not records:
@@ -116,9 +141,17 @@ async def premium_history(worker_id: str, request: Request, db: AsyncSession = D
 
 
 @router.post("/predictive-coverage")
-async def predictive_coverage(payload: PredictiveCoverageRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def predictive_coverage(
+    payload: PredictiveCoverageRequest,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
-    policy = (await db.execute(select(Policy).where(Policy.worker_id == payload.worker_id).order_by(desc(Policy.created_at)))).scalar_one_or_none()
+    if str(current_worker.id) != payload.worker_id:
+        return error_response("FORBIDDEN", "You are not authorized to access predictive coverage for another worker.", status_code=403, request_id=request_id)
+
+    policy = (await db.execute(select(Policy).where(Policy.worker_id == payload.worker_id).order_by(desc(Policy.created_at)))).scalars().first()
     if not policy:
         return error_response("NOT_FOUND", "Policy not found.", status_code=404, request_id=request_id)
 

@@ -1,10 +1,11 @@
 import { Link, useSearchParams } from "react-router-dom";
 import { useMemo } from "react";
-import { CheckCircle, CloudRain, ShieldAlert, TriangleAlert } from "lucide-react";
+import { CheckCircle, CloudRain, ShieldAlert } from "lucide-react";
 
 import { Card } from "../../design-system/components/Card";
 import { Badge } from "../../design-system/components/Badge";
 import { StatusIndicator } from "../../design-system/components/StatusIndicator";
+import { useAuthGuard } from "../../hooks/useAuthGuard";
 import { useWorkerStore } from "../../store/workerStore";
 import { MOCK_CLAIMS, MOCK_TRIGGER_EVENTS } from "../../utils/mockData";
 import { formatDateTime, formatINR } from "../../utils/formatters";
@@ -21,8 +22,17 @@ const statusMap = {
 export function WorkerDashboardPage() {
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get("demo") === "true";
+  const { isAuthenticated, isLoading } = useAuthGuard();
   const { currentWorker, status } = useWorkerStore();
   const claimsFeed = useSSE("/api/sse/claims");
+
+  if (isLoading) {
+    return null;
+  }
+
+  if (!isAuthenticated || !currentWorker) {
+    return null;
+  }
 
   const liveTrigger = useMemo(() => {
     if (demoMode) return MOCK_TRIGGER_EVENTS[0];

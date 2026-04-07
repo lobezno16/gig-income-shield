@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+backend/ml/models/
 
 # Frontend
 frontend/node_modules/
@@ -12,4 +13,3 @@ frontend/*.tsbuildinfo
 # Environment
 .env
 backend/.env
-

@@ -4,20 +4,32 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export const api = axios.create({
   baseURL: API_URL,
-  timeout: 8000,
-});
-
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("soteria_access_token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  timeout: 10000,
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const originalRequest = error?.config as (typeof error.config & { _retry?: boolean }) | undefined;
+    const statusCode = error?.response?.status;
+    const requestUrl = String(originalRequest?.url ?? "");
+    const isAuthEndpoint =
+      requestUrl.includes("/auth/send-otp") ||
+      requestUrl.includes("/auth/verify-otp") ||
+      requestUrl.includes("/auth/logout") ||
+      requestUrl.includes("/auth/refresh");
+
+    if (statusCode === 401 && originalRequest && !originalRequest._retry && !isAuthEndpoint) {
+      originalRequest._retry = true;
+      try {
+        await api.post("/auth/refresh");
+        return api(originalRequest);
+      } catch {
+        return Promise.reject(error);
+      }
+    }
+
     return Promise.reject(error);
   }
 );
@@ -27,8 +39,8 @@ export async function sendOtp(phone: string) {
   return data;
 }
 
-export async function verifyOtp(phone: string, otp: string, demoMode: boolean) {
-  const { data } = await api.post("/auth/verify-otp", { phone, otp, demo_mode: demoMode });
+export async function verifyOtp(phone: string, otp: string, otpToken: string) {
+  const { data } = await api.post("/auth/verify-otp", { phone, otp, otp_token: otpToken });
   return data;
 }
 
@@ -77,3 +89,6 @@ export async function getFeatureImportance() {
   return data;
 }
 
+export async function logout() {
+  await api.post("/auth/logout");
+}

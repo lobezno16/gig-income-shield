@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import h3
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -10,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from events import event_bus
-from models import TriggerEvent
+from models import TriggerEvent, Worker
 from response import error_response, request_id_from_request, success_response
+from services.claims_orchestrator import orchestrate_claim_for_worker
 from services.sentinelle.data_sources import classify_trigger_level
 from services.sentinelle.trigger_processor import create_trigger_event
 
@@ -35,6 +37,54 @@ class TriggerSimulationPayload(BaseModel):
     source: str = Field(default="simulation")
 
 
+async def auto_process_trigger_claims(db: AsyncSession, event: TriggerEvent, max_workers: int = 40) -> dict:
+    try:
+        center_lat, center_lng = h3.cell_to_latlng(event.h3_hex)
+    except Exception:
+        center_lat, center_lng = (28.6139, 77.2090)
+
+    workers = (
+        await db.execute(
+            select(Worker).where(Worker.h3_hex == event.h3_hex, Worker.is_active.is_(True)).order_by(Worker.created_at.desc()).limit(max_workers)
+        )
+    ).scalars().all()
+
+    claims_created = 0
+    paid = 0
+    blocked = 0
+    total_payout = 0.0
+    for worker in workers:
+        claim, settlement = await orchestrate_claim_for_worker(
+            db,
+            worker=worker,
+            trigger=event,
+            gps_lat=center_lat,
+            gps_lng=center_lng,
+            platform_active_at_trigger=True,
+            timestamp=datetime.utcnow(),
+            typical_shift_start=8,
+            typical_shift_end=23,
+        )
+        if claim is None:
+            continue
+        claims_created += 1
+        total_payout += float(claim.payout_amount)
+        if claim.status.value == "paid":
+            paid += 1
+        if claim.status.value == "blocked":
+            blocked += 1
+
+    event.total_payout_inr = total_payout
+    await db.commit()
+    await db.refresh(event)
+    return {
+        "claims_created": claims_created,
+        "paid": paid,
+        "blocked": blocked,
+        "total_payout_inr": round(total_payout, 2),
+    }
+
+
 @router.post("/webhooks/disruption")
 async def disruption_webhook(payload: TriggerWebhookPayload, request: Request, db: AsyncSession = Depends(get_db)):
     request_id = request_id_from_request(request)
@@ -52,6 +102,7 @@ async def disruption_webhook(payload: TriggerWebhookPayload, request: Request, d
         trigger_level=trigger_level,
         payout_pct=payout_pct,
     )
+    claim_summary = await auto_process_trigger_claims(db, event)
     return success_response(
         {
             "trigger_id": str(event.id),
@@ -59,6 +110,11 @@ async def disruption_webhook(payload: TriggerWebhookPayload, request: Request, d
             "trigger_level": event.trigger_level,
             "payout_pct": float(event.payout_pct),
             "workers_affected": event.workers_affected,
+            "claims_created": claim_summary["claims_created"],
+            "claims_paid": claim_summary["paid"],
+            "claims_blocked": claim_summary["blocked"],
+            "total_payout_inr": claim_summary["total_payout_inr"],
+            "claims": claim_summary,
         },
         request_id=request_id,
     )
@@ -109,6 +165,7 @@ async def simulate_trigger(payload: TriggerSimulationPayload, request: Request, 
         trigger_level=trigger_level,
         payout_pct=payout_pct,
     )
+    claim_summary = await auto_process_trigger_claims(db, event)
     await event_bus.publish(
         "claims",
         "trigger_fired",
@@ -118,9 +175,21 @@ async def simulate_trigger(payload: TriggerSimulationPayload, request: Request, 
             "reading": payload.reading_value,
             "h3_hex": payload.h3_hex,
             "payout_pct": payout_pct,
+            "claims_created": claim_summary["claims_created"],
         },
     )
-    return success_response({"simulated": True, "trigger_id": str(event.id)}, request_id=request_id)
+    return success_response(
+        {
+            "simulated": True,
+            "trigger_id": str(event.id),
+            "claims_created": claim_summary["claims_created"],
+            "claims_paid": claim_summary["paid"],
+            "claims_blocked": claim_summary["blocked"],
+            "total_payout_inr": claim_summary["total_payout_inr"],
+            "claims": claim_summary,
+        },
+        request_id=request_id,
+    )
 
 
 @router.get("/sse/triggers")
@@ -130,4 +199,3 @@ async def trigger_sse():
             yield event
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
-

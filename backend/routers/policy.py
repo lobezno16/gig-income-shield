@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
@@ -8,12 +9,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from constants import IRDAI_EXCLUSIONS
 from database import get_db
+from dependencies import get_current_worker
 from models import PlanType, Policy, PremiumRecord, Worker
 from response import error_response, request_id_from_request, success_response
 from schemas.policy import UpdatePlanRequest
 from services.athena.premium_engine import AthenaPremiumEngine
 
 router = APIRouter(prefix="/api/policy", tags=["policy"])
+
+
+def _is_owner(current_worker: Worker, worker_id: str) -> bool:
+    try:
+        return current_worker.id == UUID(worker_id)
+    except ValueError:
+        return False
 
 
 def _policy_payload(policy: Policy, worker: Worker, premium_record: PremiumRecord | None) -> dict:
@@ -64,10 +73,18 @@ def _policy_payload(policy: Policy, worker: Worker, premium_record: PremiumRecor
 
 
 @router.get("/{worker_id}")
-async def get_policy(worker_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def get_policy(
+    worker_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to access this policy.", status_code=403, request_id=request_id)
+
     policy_stmt = select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at))
-    policy = (await db.execute(policy_stmt)).scalar_one_or_none()
+    policy = (await db.execute(policy_stmt)).scalars().first()
     if not policy:
         return error_response("NOT_FOUND", "Policy not found for worker.", status_code=404, request_id=request_id)
 
@@ -77,15 +94,24 @@ async def get_policy(worker_id: str, request: Request, db: AsyncSession = Depend
 
     premium_record = (
         await db.execute(select(PremiumRecord).where(PremiumRecord.policy_id == policy.id).order_by(desc(PremiumRecord.created_at)))
-    ).scalar_one_or_none()
+    ).scalars().first()
     return success_response(_policy_payload(policy, worker, premium_record), request_id=request_id)
 
 
 @router.put("/{worker_id}/plan")
-async def update_plan(worker_id: str, payload: UpdatePlanRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def update_plan(
+    worker_id: str,
+    payload: UpdatePlanRequest,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to update this policy.", status_code=403, request_id=request_id)
+
     worker = (await db.execute(select(Worker).where(Worker.id == worker_id))).scalar_one_or_none()
-    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalar_one_or_none()
+    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalars().first()
     if not worker or not policy:
         return error_response("NOT_FOUND", "Worker/policy not found.", status_code=404, request_id=request_id)
 
@@ -123,4 +149,3 @@ async def update_plan(worker_id: str, payload: UpdatePlanRequest, request: Reque
         },
         request_id=request_id,
     )
-

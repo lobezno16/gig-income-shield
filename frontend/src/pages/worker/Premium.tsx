@@ -2,6 +2,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { Card } from "../../design-system/components/Card";
+import { useAuthGuard } from "../../hooks/useAuthGuard";
 import { useWorkerStore } from "../../store/workerStore";
 import { usePremium } from "../../hooks/usePremium";
 import { formatINR } from "../../utils/formatters";
@@ -29,8 +30,18 @@ const fallbackShap = [
 export function WorkerPremiumPage() {
   const [searchParams] = useSearchParams();
   const demoMode = searchParams.get("demo") === "true";
+  const { isAuthenticated, isLoading } = useAuthGuard();
   const { currentWorker } = useWorkerStore();
-  const query = usePremium(currentWorker.id);
+  const query = usePremium(currentWorker?.id ?? "");
+
+  if (isLoading) {
+    return null;
+  }
+
+  if (!isAuthenticated || !currentWorker) {
+    return null;
+  }
+
   const breakdown = query.data?.data?.formula_breakdown ?? fallbackBreakdown;
   const shapRaw = query.data?.data?.shap_values;
   const shapData = shapRaw
@@ -121,4 +132,3 @@ export function WorkerPremiumPage() {
     </main>
   );
 }
-

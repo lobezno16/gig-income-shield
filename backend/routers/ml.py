@@ -5,6 +5,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from dependencies import require_admin
 from models import Policy, PremiumRecord, Worker
 from response import error_response, request_id_from_request, success_response
 from services.athena.premium_engine import AthenaPremiumEngine
@@ -13,7 +14,7 @@ router = APIRouter(prefix="/api/ml", tags=["ml"])
 
 
 @router.get("/feature-importance")
-async def feature_importance(request: Request, db: AsyncSession = Depends(get_db)):
+async def feature_importance(request: Request, _admin: Worker = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     request_id = request_id_from_request(request)
     engine = AthenaPremiumEngine(db)
     artifacts = engine.rf_model.load_or_train_default()
@@ -29,10 +30,15 @@ async def feature_importance(request: Request, db: AsyncSession = Depends(get_db
 
 
 @router.get("/shap/{worker_id}")
-async def worker_shap(worker_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def worker_shap(
+    worker_id: str,
+    request: Request,
+    _admin: Worker = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
     worker = (await db.execute(select(Worker).where(Worker.id == worker_id))).scalar_one_or_none()
-    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalar_one_or_none()
+    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalars().first()
     if not worker or not policy:
         return error_response("NOT_FOUND", "Worker or policy not found.", status_code=404, request_id=request_id)
     engine = AthenaPremiumEngine(db)
@@ -47,4 +53,3 @@ async def worker_shap(worker_id: str, request: Request, db: AsyncSession = Depen
         },
         request_id=request_id,
     )
-

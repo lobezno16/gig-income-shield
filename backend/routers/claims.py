@@ -1,28 +1,33 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import timezone
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
+from dependencies import get_current_worker
 from events import event_bus
-from models import Claim, ClaimStatus, Policy, TriggerEvent, Worker
+from models import Claim, TriggerEvent, Worker
 from response import error_response, request_id_from_request, success_response
 from schemas.claim import CreateClaimRequest
-from services.argus.fraud_pipeline import ArgusFraudPipeline
-from services.argus.layer0_rules import Layer0ClaimData
-from services.hermes.settlement import process_settlement
-from services.id_gen import generate_claim_number
+from services.claims_orchestrator import orchestrate_claim_for_worker
 
 router = APIRouter(prefix="/api", tags=["claims"])
 
 
+def _is_owner(current_worker: Worker, worker_id: str) -> bool:
+    try:
+        return current_worker.id == UUID(worker_id)
+    except ValueError:
+        return False
+
+
 def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[dict]:
     created = claim.created_at.astimezone(timezone.utc)
-    # Static timeline for consistent demo output.
     final_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
     all_steps = [
         {
@@ -35,25 +40,25 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
             "id": "eligibility_check",
             "label": "Eligibility Verified",
             "description": "Active policy · Warranty met · Zone confirmed",
-            "timestamp": (created).isoformat(),
+            "timestamp": created.isoformat(),
         },
         {
             "id": "fraud_check",
             "label": "Verification Complete",
             "description": f"ARGUS complete · score {float(claim.fraud_score or 0):.2f}",
-            "timestamp": (created).isoformat(),
+            "timestamp": created.isoformat(),
         },
         {
             "id": "payout_calculated",
             "label": "Payout Calculated",
             "description": f"Auto-calculated payout Rs {amount:.0f}",
-            "timestamp": (created).isoformat(),
+            "timestamp": created.isoformat(),
         },
         {
             "id": "transfer_initiated",
             "label": "Transfer Initiated",
             "description": f"Settlement initiated to {worker.upi_id}",
-            "timestamp": (created).isoformat(),
+            "timestamp": created.isoformat(),
         },
         {
             "id": "confirmed",
@@ -80,9 +85,17 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
 
 
 @router.get("/claims/{worker_id}")
-async def get_claims(worker_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def get_claims(
+    worker_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
-    stmt = select(Claim).where(Claim.worker_id == worker_id).order_by(desc(Claim.created_at))
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to access this worker's claims.", status_code=403, request_id=request_id)
+
+    stmt = select(Claim).where(Claim.worker_id == worker_id).order_by(Claim.created_at.desc())
     claims = (await db.execute(stmt)).scalars().all()
     result = []
     for c in claims:
@@ -106,8 +119,17 @@ async def get_claims(worker_id: str, request: Request, db: AsyncSession = Depend
 
 
 @router.get("/claims/{worker_id}/{claim_id}")
-async def get_claim_detail(worker_id: str, claim_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+async def get_claim_detail(
+    worker_id: str,
+    claim_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to access this claim.", status_code=403, request_id=request_id)
+
     stmt = select(Claim).where(Claim.id == claim_id, Claim.worker_id == worker_id)
     claim = (await db.execute(stmt)).scalar_one_or_none()
     if not claim:
@@ -132,8 +154,16 @@ async def get_claim_detail(worker_id: str, claim_id: str, request: Request, db: 
 
 
 @router.post("/claims/create")
-async def create_claim(payload: CreateClaimRequest, request: Request, db: AsyncSession = Depends(get_db)):
+async def create_claim(
+    payload: CreateClaimRequest,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
     request_id = request_id_from_request(request)
+    if str(current_worker.id) != payload.worker_id:
+        return error_response("FORBIDDEN", "You are not authorized to create claims for another worker.", status_code=403, request_id=request_id)
+
     worker = (await db.execute(select(Worker).where(Worker.id == payload.worker_id))).scalar_one_or_none()
     if not worker:
         return error_response("NOT_FOUND", "Worker not found.", status_code=404, request_id=request_id)
@@ -142,61 +172,19 @@ async def create_claim(payload: CreateClaimRequest, request: Request, db: AsyncS
     if not trigger:
         return error_response("NOT_FOUND", "Trigger not found.", status_code=404, request_id=request_id)
 
-    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker.id).order_by(desc(Policy.created_at)))).scalar_one_or_none()
-    if not policy:
-        return error_response("NOT_FOUND", "Policy not found.", status_code=404, request_id=request_id)
-
-    claim_number = generate_claim_number()
-    claim = Claim(
-        claim_number=claim_number,
-        worker_id=worker.id,
-        policy_id=policy.id,
-        trigger_id=trigger.id,
-        status=ClaimStatus.processing,
-        payout_amount=0,
-        payout_pct=trigger.payout_pct,
-        fraud_flags=[],
-        argus_layers={},
-    )
-    db.add(claim)
-    await db.commit()
-    await db.refresh(claim)
-
-    argus = ArgusFraudPipeline()
-    fraud = await argus.evaluate(
+    claim, settlement_info = await orchestrate_claim_for_worker(
         db,
-        worker,
-        trigger,
-        Layer0ClaimData(
-            gps_lat=payload.gps_lat,
-            gps_lng=payload.gps_lng,
-            platform_active_at_trigger=payload.platform_active_at_trigger,
-            timestamp=payload.timestamp,
-            typical_shift_start=payload.typical_shift_start,
-            typical_shift_end=payload.typical_shift_end,
-        ),
+        worker=worker,
+        trigger=trigger,
+        gps_lat=payload.gps_lat,
+        gps_lng=payload.gps_lng,
+        platform_active_at_trigger=payload.platform_active_at_trigger,
+        timestamp=payload.timestamp,
+        typical_shift_start=payload.typical_shift_start,
+        typical_shift_end=payload.typical_shift_end,
     )
-    claim.fraud_score = fraud.combined_score
-    claim.fraud_flags = fraud.fraud_flags
-    claim.argus_layers = fraud.layers
-    claim.status = ClaimStatus(fraud.status)
-    await db.commit()
-    await db.refresh(claim)
-
-    await event_bus.publish(
-        "claims",
-        "new_claim",
-        {
-            "id": str(claim.id),
-            "claim_number": claim.claim_number,
-            "worker_id": str(claim.worker_id),
-            "status": claim.status.value,
-            "argus_score": float(claim.fraud_score or 0),
-        },
-    )
-
-    settlement = await process_settlement(claim, worker, trigger, policy, db)
-    await db.refresh(claim)
+    if claim is None:
+        return error_response("NOT_ELIGIBLE", "Worker does not have an active policy.", status_code=400, request_id=request_id)
 
     return success_response(
         {
@@ -206,14 +194,25 @@ async def create_claim(payload: CreateClaimRequest, request: Request, db: AsyncS
             "payout_amount": float(claim.payout_amount),
             "fraud_score": float(claim.fraud_score or 0),
             "settlement": {
-                "status": settlement.status,
-                "attempts": settlement.attempts,
-                "message": settlement.message,
+                "status": settlement_info["settlement_status"],
+                "attempts": settlement_info["attempts"],
+                "message": settlement_info["message"],
                 "upi_ref": claim.upi_ref,
             },
         },
         request_id=request_id,
     )
+
+
+@router.post("/claims")
+async def create_claim_alias(
+    payload: CreateClaimRequest,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
+    # Alias maintained for API-contract flexibility around /api/claims POST.
+    return await create_claim(payload, request, current_worker, db)
 
 
 @router.get("/sse/claims")
