@@ -39,8 +39,8 @@ export function WorkerPolicyPage() {
       <Card>
         <h1 style={{ marginTop: 0 }}>Policy Management</h1>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <Badge tone="success">ACTIVE</Badge>
-          <span className="mono">SOT-2026-001847</span>
+          <Badge tone={currentWorker.policy_status === "active" ? "success" : "warning"}>{(currentWorker.policy_status ?? "active").toUpperCase()}</Badge>
+          <span className="mono">{currentWorker.policy_number ?? "Pending issuance"}</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 16 }}>
           <div className="surface" style={{ padding: 12 }}>

@@ -59,6 +59,11 @@ export async function getPremium(workerId: string) {
   return data;
 }
 
+export async function getMe() {
+  const { data } = await api.get("/api/me");
+  return data;
+}
+
 export async function getClaims(workerId: string) {
   const { data } = await api.get(`/api/claims/${workerId}`);
   return data;

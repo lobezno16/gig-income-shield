@@ -4,6 +4,7 @@ export type Plan = "lite" | "standard" | "pro";
 export type Peril = "aqi" | "rain" | "heat" | "flood" | "storm" | "curfew" | "store";
 export type PolicyStatus = "active" | "lapsed" | "suspended";
 export type ClaimStatus = "processing" | "approved" | "paid" | "flagged" | "blocked";
+export type UserRole = "worker" | "admin" | "superadmin";
 
 export interface Worker {
   id: string;
@@ -18,6 +19,9 @@ export interface Worker {
   plan: Plan;
   weekly_premium: number;
   max_payout_week: number;
+  policy_number?: string;
+  policy_status?: PolicyStatus;
+  role?: UserRole;
 }
 
 export interface TriggerEventItem {
@@ -34,4 +38,3 @@ export interface TriggerEventItem {
   triggered_at: string;
   label: string;
 }
-

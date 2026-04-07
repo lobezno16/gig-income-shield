@@ -127,6 +127,7 @@ export function RegistrationPage() {
           plan: data.plan,
           weekly_premium: 35,
           max_payout_week: 700,
+          role: workerData.role,
         });
         nav(`/dashboard${demoMode ? "?demo=true" : ""}`);
         return;
@@ -197,6 +198,9 @@ export function RegistrationPage() {
             plan: data.plan,
             weekly_premium: response?.data?.coverage?.weekly_premium_inr ?? MOCK_WORKERS[0].weekly_premium,
             max_payout_week: response?.data?.coverage?.max_payout_per_week_inr ?? MOCK_WORKERS[0].max_payout_week,
+            policy_number: response?.data?.policy_number,
+            policy_status: response?.data?.coverage?.status,
+            role: apiWorker.role,
           }
         : demoMode
           ? MOCK_WORKERS[0]

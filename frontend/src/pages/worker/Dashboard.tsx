@@ -68,7 +68,7 @@ export function WorkerDashboardPage() {
             <StatusIndicator status={status} />
             <h2 style={{ margin: "8px 0", fontSize: "var(--text-lg)" }}>{statusMap[status]}</h2>
             <p className="mono" style={{ margin: 0 }}>
-              Policy: SOT-2026-001847
+              Policy: {currentWorker.policy_number ?? "Pending issuance"}
             </p>
             <p style={{ margin: "6px 0 0 0", fontWeight: 800, fontSize: "var(--text-lg)" }}>
               Protected {formatINR(currentWorker.max_payout_week)}

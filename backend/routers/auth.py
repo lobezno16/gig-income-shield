@@ -3,13 +3,14 @@ from uuid import UUID
 
 from fastapi import APIRouter, Cookie, Depends, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_utils import create_access_token, create_refresh_token, decode_token
 from config import get_settings
 from database import get_db
-from models import Worker
+from dependencies import get_current_worker
+from models import Policy, PolicyStatus, Worker
 from redis_client import get_redis
 from response import error_response, request_id_from_request, success_response
 from schemas.worker import OtpSendRequest, OtpVerifyRequest
@@ -24,6 +25,7 @@ from services.otp_service import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+api_router = APIRouter(prefix="/api", tags=["auth"])
 settings = get_settings()
 
 
@@ -232,3 +234,53 @@ async def logout(request: Request):
     response.delete_cookie("soteria_auth", path="/")
     response.delete_cookie("soteria_refresh", path="/auth")
     return response
+
+
+@api_router.get("/me")
+async def get_me(
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
+    request_id = request_id_from_request(request)
+    stmt = (
+        select(Worker, Policy)
+        .outerjoin(Policy, (Policy.worker_id == Worker.id) & (Policy.status == PolicyStatus.active))
+        .where(Worker.id == current_worker.id)
+        .order_by(desc(Policy.created_at).nullslast())
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return error_response(
+            code="WORKER_NOT_FOUND",
+            message="Worker not found.",
+            status_code=404,
+            request_id=request_id,
+        )
+
+    worker, policy = row
+    data = {
+        "id": str(worker.id),
+        "name": worker.name,
+        "phone": worker.phone,
+        "platform": worker.platform.value,
+        "city": worker.city,
+        "h3_hex": worker.h3_hex,
+        "upi_id": worker.upi_id,
+        "tier": worker.tier.value,
+        "active_days_30": worker.active_days_30,
+        "role": worker.role.value,
+        "policy": (
+            {
+                "plan": policy.plan.value,
+                "weekly_premium": float(policy.weekly_premium),
+                "max_payout_week": float(policy.max_payout_week),
+                "policy_number": policy.policy_number,
+                "status": policy.status.value,
+            }
+            if policy
+            else None
+        ),
+    }
+    return success_response(data, request_id=request_id)

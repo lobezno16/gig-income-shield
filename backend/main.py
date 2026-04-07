@@ -70,6 +70,7 @@ def create_app() -> FastAPI:
         )
 
     app.include_router(auth.router)
+    app.include_router(auth.api_router)
     app.include_router(registration.router)
     app.include_router(policy.router)
     app.include_router(premium.router)

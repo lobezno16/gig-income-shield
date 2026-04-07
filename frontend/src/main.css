@@ -67,3 +67,47 @@ a {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.session-loader {
+  min-height: 100vh;
+  background: #0a0a0a;
+  color: #f5f5f5;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.session-loader__content {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 20px;
+}
+
+.session-loader__wordmark {
+  margin: 0;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.session-loader__stack {
+  display: grid;
+  gap: 10px;
+}
+
+.session-loader__line {
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #161616 20%, #2c2c2c 50%, #161616 80%);
+  background-size: 240px 100%;
+  animation: soteria-shimmer 1.4s infinite linear;
+}
+
+.session-loader__line--short {
+  width: 56%;
+}
+
+.session-loader__line--medium {
+  width: 72%;
+}
