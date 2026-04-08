@@ -1,6 +1,8 @@
-import { lazy, Suspense } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { lazy, Suspense, type ReactNode } from "react";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+
 import { InstallAppPrompt } from "./components/InstallAppPrompt";
+import { useWorkerStore } from "./store/workerStore";
 
 const RegistrationPage = lazy(() => import("./pages/worker/Registration").then((m) => ({ default: m.RegistrationPage })));
 const WorkerDashboardPage = lazy(() => import("./pages/worker/Dashboard").then((m) => ({ default: m.WorkerDashboardPage })));
@@ -14,7 +16,42 @@ const ClaimsQueuePage = lazy(() => import("./pages/admin/ClaimsQueue").then((m) 
 const FraudAlertsPage = lazy(() => import("./pages/admin/FraudAlerts").then((m) => ({ default: m.FraudAlertsPage })));
 const MLDashboardPage = lazy(() => import("./pages/admin/MLDashboard").then((m) => ({ default: m.MLDashboardPage })));
 
+function AdminGuard({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isLoading, currentWorker } = useWorkerStore();
+  const location = useLocation();
+  const role = currentWorker?.role;
+  const isAdmin = isAuthenticated && (role === "admin" || role === "superadmin");
+
+  if (isLoading) {
+    return (
+      <main className="layout" style={{ maxWidth: 720 }}>
+        <section className="card">
+          <h1 style={{ marginTop: 0 }}>Checking access...</h1>
+          <p style={{ color: "var(--text-secondary)", marginBottom: 0 }}>Validating admin credentials.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <Navigate
+        to="/register"
+        replace
+        state={{
+          message: "Admin access required",
+          from: location.pathname,
+        }}
+      />
+    );
+  }
+
+  return <>{children}</>;
+}
+
 export default function App() {
+  const location = useLocation();
+
   return (
     <Suspense
       fallback={
@@ -27,21 +64,65 @@ export default function App() {
       }
     >
       <InstallAppPrompt />
-      <Routes>
-        <Route path="/" element={<Navigate to="/register" replace />} />
-        <Route path="/register" element={<RegistrationPage />} />
-        <Route path="/dashboard" element={<WorkerDashboardPage />} />
-        <Route path="/policy" element={<WorkerPolicyPage />} />
-        <Route path="/premium" element={<WorkerPremiumPage />} />
-        <Route path="/claims" element={<WorkerClaimsPage />} />
-        <Route path="/admin" element={<AdminOverviewPage />} />
-        <Route path="/admin/bcr" element={<BCRDashboardPage />} />
-        <Route path="/admin/heatmap" element={<HexHeatmapPage />} />
-        <Route path="/admin/claims" element={<ClaimsQueuePage />} />
-        <Route path="/admin/fraud" element={<FraudAlertsPage />} />
-        <Route path="/admin/ml" element={<MLDashboardPage />} />
-        <Route path="*" element={<Navigate to="/register" replace />} />
-      </Routes>
+      <div key={location.pathname} className="route-fade">
+        <Routes>
+          <Route path="/" element={<Navigate to="/register" replace />} />
+          <Route path="/register" element={<RegistrationPage />} />
+          <Route path="/dashboard" element={<WorkerDashboardPage />} />
+          <Route path="/policy" element={<WorkerPolicyPage />} />
+          <Route path="/premium" element={<WorkerPremiumPage />} />
+          <Route path="/claims" element={<WorkerClaimsPage />} />
+          <Route
+            path="/admin"
+            element={
+              <AdminGuard>
+                <AdminOverviewPage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/bcr"
+            element={
+              <AdminGuard>
+                <BCRDashboardPage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/heatmap"
+            element={
+              <AdminGuard>
+                <HexHeatmapPage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/claims"
+            element={
+              <AdminGuard>
+                <ClaimsQueuePage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/fraud"
+            element={
+              <AdminGuard>
+                <FraudAlertsPage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/ml"
+            element={
+              <AdminGuard>
+                <MLDashboardPage />
+              </AdminGuard>
+            }
+          />
+          <Route path="*" element={<Navigate to="/register" replace />} />
+        </Routes>
+      </div>
     </Suspense>
   );
 }

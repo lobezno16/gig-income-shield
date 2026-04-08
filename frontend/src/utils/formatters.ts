@@ -7,6 +7,18 @@ export function formatINR(amount: number): string {
   }).format(amount);
 }
 
+export const POOL_DISPLAY_NAMES: Record<string, string> = {
+  delhi_aqi_pool: "Delhi NCR - Air Quality Pool",
+  mumbai_rain_pool: "Mumbai - Rainfall Pool",
+  chennai_rain_pool: "Chennai - Rainfall Pool",
+  bangalore_mixed_pool: "Bengaluru - Mixed Risk Pool",
+  kolkata_flood_pool: "Kolkata - Flood Risk Pool",
+};
+
+export function getPoolDisplayName(poolId: string): string {
+  return POOL_DISPLAY_NAMES[poolId] ?? poolId.replace(/_/g, " ").replace(/\b\w/g, (part) => part.toUpperCase());
+}
+
 export function formatHex(hex: string): string {
   return `${hex.substring(0, 8)}...`;
 }
@@ -24,4 +36,3 @@ export function formatDateTime(iso: string): string {
     minute: "2-digit",
   });
 }
-

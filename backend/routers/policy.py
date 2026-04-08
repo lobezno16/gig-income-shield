@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from constants import IRDAI_EXCLUSIONS
 from database import get_db
 from dependencies import get_current_worker
-from models import PlanType, Policy, PremiumRecord, Worker
+from models import PlanType, Policy, PolicyStatus, PremiumRecord, Worker
 from response import error_response, request_id_from_request, success_response
 from schemas.policy import UpdatePlanRequest
 from services.athena.premium_engine import AthenaPremiumEngine
@@ -122,6 +122,16 @@ async def update_plan(
     policy.weekly_premium = result.final_premium
     policy.max_payout_week = result.max_payout
     policy.coverage_days = result.days_covered
+    policy.warranty_met = worker.active_days_30 >= 7
+
+    now_utc = datetime.now(timezone.utc)
+    expires_at = policy.expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if policy.status != PolicyStatus.active or not expires_at or expires_at < now_utc:
+        policy.status = PolicyStatus.active
+        policy.expires_at = now_utc + timedelta(days=7)
+
     await db.commit()
     await db.refresh(policy)
 
@@ -146,6 +156,58 @@ async def update_plan(
             "weekly_premium_inr": float(policy.weekly_premium),
             "max_payout_per_week_inr": float(policy.max_payout_week),
             "coverage_days_per_week": policy.coverage_days,
+        },
+        request_id=request_id,
+    )
+
+
+@router.post("/{worker_id}/renew")
+async def renew_policy(
+    worker_id: str,
+    request: Request,
+    current_worker: Worker = Depends(get_current_worker),
+    db: AsyncSession = Depends(get_db),
+):
+    request_id = request_id_from_request(request)
+    if not _is_owner(current_worker, worker_id):
+        return error_response("FORBIDDEN", "You are not authorized to renew this policy.", status_code=403, request_id=request_id)
+
+    worker = (await db.execute(select(Worker).where(Worker.id == worker_id))).scalar_one_or_none()
+    policy = (await db.execute(select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at)))).scalars().first()
+    if not worker or not policy:
+        return error_response("NOT_FOUND", "Worker/policy not found.", status_code=404, request_id=request_id)
+
+    engine = AthenaPremiumEngine(db)
+    result = await engine.calculate_premium(worker, policy.plan, policy.pool_id, policy.urban_tier)
+
+    policy.status = PolicyStatus.active
+    policy.weekly_premium = result.final_premium
+    policy.max_payout_week = result.max_payout
+    policy.coverage_days = result.days_covered
+    policy.warranty_met = worker.active_days_30 >= 7
+    policy.expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+
+    record = PremiumRecord(
+        worker_id=worker.id,
+        policy_id=policy.id,
+        week_start=datetime.now(timezone.utc).date(),
+        base_formula=result.base_cost,
+        ml_adjustment=result.ml_adjustment,
+        final_premium=result.final_premium,
+        shap_values=result.shap_values,
+        bayesian_probs={result.peril: result.trigger_probability},
+        features=result.features,
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(policy)
+
+    return success_response(
+        {
+            "renewed": True,
+            "new_expires_at": policy.expires_at.isoformat() if policy.expires_at else None,
+            "new_weekly_premium": float(policy.weekly_premium),
+            "plan": policy.plan.value,
         },
         request_id=request_id,
     )

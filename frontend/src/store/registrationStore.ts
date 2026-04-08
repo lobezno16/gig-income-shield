@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { Plan, Platform } from "../types";
+import { CITY_COORDINATES } from "../utils/geo";
 
 interface RegistrationForm {
   phone: string;
@@ -9,6 +10,7 @@ interface RegistrationForm {
   name: string;
   platform: Platform;
   platformWorkerId: string;
+  activeDays: number;
   city: string;
   latitude: number;
   longitude: number;
@@ -34,9 +36,10 @@ const defaults: RegistrationForm = {
   name: "",
   platform: "zepto",
   platformWorkerId: "",
+  activeDays: 15,
   city: "delhi",
-  latitude: 28.6139,
-  longitude: 77.209,
+  latitude: CITY_COORDINATES.delhi[0],
+  longitude: CITY_COORDINATES.delhi[1],
   h3Hex: "872a1072bffffff",
   pool: "delhi_aqi_pool",
   urbanTier: 1,
@@ -51,4 +54,3 @@ export const useRegistrationStore = create<RegistrationState>((set) => ({
   patch: (next) => set((s) => ({ data: { ...s.data, ...next } })),
   reset: () => set({ step: 1, data: defaults }),
 }));
-

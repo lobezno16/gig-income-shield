@@ -1,17 +1,20 @@
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import timedelta, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from database import get_db
 from dependencies import get_current_worker
+from middleware.rate_limit import RateLimitExceeded, rate_limit
 from events import event_bus
 from models import Claim, TriggerEvent, Worker
+from redis_client import get_redis
 from response import error_response, request_id_from_request, success_response
 from schemas.claim import CreateClaimRequest
 from services.claims_orchestrator import orchestrate_claim_for_worker
@@ -28,6 +31,12 @@ def _is_owner(current_worker: Worker, worker_id: str) -> bool:
 
 def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[dict]:
     created = claim.created_at.astimezone(timezone.utc)
+    eligibility_time = created + timedelta(seconds=30)
+    fraud_time = created + timedelta(seconds=60)
+    payout_time = created + timedelta(seconds=90)
+    transfer_time = created + timedelta(seconds=120)
+    fallback_confirmed = created + timedelta(seconds=180)
+    confirmed_time = claim.settled_at.astimezone(timezone.utc) if claim.settled_at else fallback_confirmed
     final_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
     all_steps = [
         {
@@ -40,31 +49,31 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
             "id": "eligibility_check",
             "label": "Eligibility Verified",
             "description": "Active policy · Warranty met · Zone confirmed",
-            "timestamp": created.isoformat(),
+            "timestamp": eligibility_time.isoformat(),
         },
         {
             "id": "fraud_check",
             "label": "Verification Complete",
             "description": f"ARGUS complete · score {float(claim.fraud_score or 0):.2f}",
-            "timestamp": created.isoformat(),
+            "timestamp": fraud_time.isoformat(),
         },
         {
             "id": "payout_calculated",
             "label": "Payout Calculated",
             "description": f"Auto-calculated payout Rs {amount:.0f}",
-            "timestamp": created.isoformat(),
+            "timestamp": payout_time.isoformat(),
         },
         {
             "id": "transfer_initiated",
             "label": "Transfer Initiated",
-            "description": f"Settlement initiated to {worker.upi_id}",
-            "timestamp": created.isoformat(),
+            "description": f"Settlement initiated to {worker.upi_id_decrypted or 'registered UPI'}",
+            "timestamp": transfer_time.isoformat(),
         },
         {
             "id": "confirmed",
             "label": "Payment Confirmed",
             "description": f"UPI Ref: {claim.upi_ref or 'PENDING'}",
-            "timestamp": (claim.settled_at or created).isoformat(),
+            "timestamp": confirmed_time.isoformat(),
         },
     ]
     status_index = {
@@ -95,11 +104,18 @@ async def get_claims(
     if not _is_owner(current_worker, worker_id):
         return error_response("FORBIDDEN", "You are not authorized to access this worker's claims.", status_code=403, request_id=request_id)
 
-    stmt = select(Claim).where(Claim.worker_id == worker_id).order_by(Claim.created_at.desc())
+    stmt = (
+        select(Claim)
+        .options(selectinload(Claim.worker))
+        .where(Claim.worker_id == worker_id)
+        .order_by(Claim.created_at.desc())
+    )
     claims = (await db.execute(stmt)).scalars().all()
     result = []
     for c in claims:
-        worker = (await db.execute(select(Worker).where(Worker.id == c.worker_id))).scalar_one()
+        worker = c.worker
+        if worker is None:
+            continue
         result.append(
             {
                 "id": str(c.id),
@@ -130,11 +146,16 @@ async def get_claim_detail(
     if not _is_owner(current_worker, worker_id):
         return error_response("FORBIDDEN", "You are not authorized to access this claim.", status_code=403, request_id=request_id)
 
-    stmt = select(Claim).where(Claim.id == claim_id, Claim.worker_id == worker_id)
+    stmt = (
+        select(Claim)
+        .options(selectinload(Claim.worker))
+        .where(Claim.id == claim_id, Claim.worker_id == worker_id)
+    )
     claim = (await db.execute(stmt)).scalar_one_or_none()
     if not claim:
         return error_response("NOT_FOUND", "Claim not found.", status_code=404, request_id=request_id)
-    worker = (await db.execute(select(Worker).where(Worker.id == claim.worker_id))).scalar_one()
+    if claim.worker is None:
+        return error_response("NOT_FOUND", "Claim worker not found.", status_code=404, request_id=request_id)
     return success_response(
         {
             "id": str(claim.id),
@@ -145,7 +166,7 @@ async def get_claim_detail(
             "fraud_score": float(claim.fraud_score) if claim.fraud_score is not None else None,
             "fraud_flags": claim.fraud_flags or [],
             "argus_layers": claim.argus_layers or {},
-            "timeline": build_claim_timeline(claim, worker, float(claim.payout_amount)),
+            "timeline": build_claim_timeline(claim, claim.worker, float(claim.payout_amount)),
             "created_at": claim.created_at.isoformat(),
             "settled_at": claim.settled_at.isoformat() if claim.settled_at else None,
         },
@@ -158,11 +179,29 @@ async def create_claim(
     payload: CreateClaimRequest,
     request: Request,
     current_worker: Worker = Depends(get_current_worker),
+    redis_client=Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = request_id_from_request(request)
     if str(current_worker.id) != payload.worker_id:
         return error_response("FORBIDDEN", "You are not authorized to create claims for another worker.", status_code=403, request_id=request_id)
+
+    try:
+        await rate_limit(
+            key=f"rate:claim:{current_worker.id}",
+            max_requests=5,
+            window_seconds=3600,
+            redis_client=redis_client,
+        )
+    except RateLimitExceeded as exc:
+        response = error_response(
+            code="RATE_LIMITED",
+            message="Too many claim submissions. Please try again later.",
+            status_code=429,
+            request_id=request_id,
+        )
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
 
     worker = (await db.execute(select(Worker).where(Worker.id == payload.worker_id))).scalar_one_or_none()
     if not worker:
@@ -209,10 +248,11 @@ async def create_claim_alias(
     payload: CreateClaimRequest,
     request: Request,
     current_worker: Worker = Depends(get_current_worker),
+    redis_client=Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ):
     # Alias maintained for API-contract flexibility around /api/claims POST.
-    return await create_claim(payload, request, current_worker, db)
+    return await create_claim(payload, request, current_worker, redis_client, db)
 
 
 @router.get("/sse/claims")
@@ -222,3 +262,4 @@ async def claims_sse():
             yield event
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+

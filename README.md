@@ -1620,3 +1620,12 @@ python scripts/seed_data.py
 python scripts/stress_test.py --all
 ```
 
+### Security Migration Note
+
+Existing `workers.upi_id` rows created before field-level encryption must be migrated once:
+
+```bash
+cd backend
+python scripts/encrypt_upi_ids.py
+```
+

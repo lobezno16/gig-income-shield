@@ -12,7 +12,12 @@ export function useSSE(path: string) {
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_URL || "http://localhost:8000";
+    if (!path) {
+      setConnected(false);
+      setEvents([]);
+      return;
+    }
+    const base = import.meta.env.VITE_API_URL || "";
     const source = new EventSource(`${base}${path}`);
     sourceRef.current = source;
 
@@ -35,4 +40,3 @@ export function useSSE(path: string) {
 
   return { events, connected };
 }
-

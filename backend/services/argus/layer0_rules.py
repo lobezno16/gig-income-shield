@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import h3
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Claim
@@ -28,9 +28,9 @@ def is_within_shift_hours(ts: datetime, shift_start: int, shift_end: int) -> boo
 
 
 async def duplicate_claim_exists(db: AsyncSession, worker_id: str, trigger_id: str) -> bool:
-    stmt = select(Claim.id).where(Claim.worker_id == worker_id, Claim.trigger_id == trigger_id)
+    stmt = select(func.count(Claim.id)).where(Claim.worker_id == worker_id, Claim.trigger_id == trigger_id)
     result = await db.execute(stmt)
-    return result.scalar_one_or_none() is not None
+    return int(result.scalar_one()) > 0
 
 
 async def layer0_rules(db: AsyncSession, worker, trigger, claim_data: Layer0ClaimData) -> tuple[bool, list[str], dict[str, bool]]:
@@ -47,4 +47,3 @@ async def layer0_rules(db: AsyncSession, worker, trigger, claim_data: Layer0Clai
     }
     failed = [k for k, v in checks.items() if not v]
     return len(failed) == 0, failed, checks
-

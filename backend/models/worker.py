@@ -34,7 +34,7 @@ class Worker(Base):
     platform_id: Mapped[str | None] = mapped_column(String(50))
     city: Mapped[str] = mapped_column(String(50), nullable=False)
     h3_hex: Mapped[str] = mapped_column(String(20), nullable=False)
-    upi_id: Mapped[str | None] = mapped_column(String(100))
+    upi_id: Mapped[str | None] = mapped_column(String(255))
     tier: Mapped[WorkerTier] = mapped_column(Enum(WorkerTier, name="worker_tier_enum"), default=WorkerTier.silver)
     active_days_30: Mapped[int] = mapped_column(Integer, default=0)
     total_deliveries: Mapped[int] = mapped_column(Integer, default=0)
@@ -46,3 +46,15 @@ class Worker(Base):
     policies = relationship("Policy", back_populates="worker")
     claims = relationship("Claim", back_populates="worker")
     premiums = relationship("PremiumRecord", back_populates="worker")
+
+    @property
+    def upi_id_decrypted(self) -> str | None:
+        if not self.upi_id:
+            return None
+        from crypto import decrypt_field
+
+        try:
+            return decrypt_field(self.upi_id)
+        except Exception:
+            # Supports backward compatibility for older plaintext rows prior to migration.
+            return self.upi_id

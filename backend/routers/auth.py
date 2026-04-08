@@ -6,7 +6,13 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth_utils import create_access_token, create_refresh_token, decode_token
+from auth_utils import (
+    blacklist_token,
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    is_token_blacklisted,
+)
 from config import get_settings
 from database import get_db
 from dependencies import get_current_worker
@@ -131,12 +137,10 @@ async def verify_otp_endpoint(
     access_token = create_access_token(
         subject=str(worker.id),
         role=worker.role.value,
-        phone=worker.phone,
     )
     refresh_token = create_refresh_token(
         subject=str(worker.id),
         role=worker.role.value,
-        phone=worker.phone,
     )
 
     response = JSONResponse(
@@ -159,6 +163,7 @@ async def verify_otp_endpoint(
 async def refresh_auth(
     request: Request,
     refresh_token: str | None = Cookie(default=None, alias="soteria_refresh"),
+    redis_client=Depends(get_redis),
     db: AsyncSession = Depends(get_db),
 ):
     request_id = request_id_from_request(request)
@@ -170,8 +175,15 @@ async def refresh_auth(
             request_id=request_id,
         )
 
-    payload = decode_token(refresh_token, expected_purpose="refresh")
+    payload = await decode_token(refresh_token, expected_purpose="refresh")
     if not payload or "sub" not in payload:
+        return error_response(
+            code="AUTH_REFRESH_INVALID",
+            message="Refresh token is missing or invalid.",
+            status_code=401,
+            request_id=request_id,
+        )
+    if await is_token_blacklisted(payload, redis_client):
         return error_response(
             code="AUTH_REFRESH_INVALID",
             message="Refresh token is missing or invalid.",
@@ -197,16 +209,15 @@ async def refresh_auth(
             status_code=401,
             request_id=request_id,
         )
+    await blacklist_token(refresh_token, redis_client)
 
     new_access_token = create_access_token(
         subject=str(worker.id),
         role=worker.role.value,
-        phone=worker.phone,
     )
     new_refresh_token = create_refresh_token(
         subject=str(worker.id),
         role=worker.role.value,
-        phone=worker.phone,
     )
     response = JSONResponse(
         content=success_response(
@@ -223,8 +234,17 @@ async def refresh_auth(
 
 
 @router.post("/logout")
-async def logout(request: Request):
+async def logout(
+    request: Request,
+    access_token: str | None = Cookie(default=None, alias="soteria_auth"),
+    refresh_token: str | None = Cookie(default=None, alias="soteria_refresh"),
+    redis_client=Depends(get_redis),
+):
     request_id = request_id_from_request(request)
+    if access_token:
+        await blacklist_token(access_token, redis_client)
+    if refresh_token:
+        await blacklist_token(refresh_token, redis_client)
     response = JSONResponse(
         content=success_response(
             {"logged_out": True},
@@ -232,7 +252,9 @@ async def logout(request: Request):
         )
     )
     response.delete_cookie("soteria_auth", path="/")
+    response.delete_cookie("soteria_auth", path="/auth")
     response.delete_cookie("soteria_refresh", path="/auth")
+    response.delete_cookie("soteria_refresh", path="/")
     return response
 
 
@@ -267,7 +289,7 @@ async def get_me(
         "platform": worker.platform.value,
         "city": worker.city,
         "h3_hex": worker.h3_hex,
-        "upi_id": worker.upi_id,
+        "upi_id": worker.upi_id_decrypted,
         "tier": worker.tier.value,
         "active_days_30": worker.active_days_30,
         "role": worker.role.value,

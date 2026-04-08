@@ -33,6 +33,12 @@ class EnrollmentRequest(BaseModel):
     longitude: float
     upi_id: str = Field(..., pattern=r"^[\w.\-]+@[\w]+$")
     plan: Literal["lite", "standard", "pro"]
+    active_days_30: int = Field(
+        default=12,
+        ge=0,
+        le=30,
+        description="Self-reported active working days in last 30 days",
+    )
 
 
 class OtpSendRequest(BaseModel):

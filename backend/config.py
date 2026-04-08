@@ -96,6 +96,10 @@ class Settings(BaseSettings):
     def cors_origins(self) -> list[str]:
         return self.allowed_origins
 
+    @property
+    def has_real_weather_data(self) -> bool:
+        return bool(self.owm_api_key and self.waqi_api_key)
+
 
 @lru_cache
 def get_settings() -> Settings:

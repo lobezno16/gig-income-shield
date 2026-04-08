@@ -70,7 +70,8 @@ body {
 }
 
 .touch-target {
-  min-height: 60px;
+  min-width: 44px;
+  min-height: 44px;
 }
 
 .pulse {
@@ -88,4 +89,3 @@ body {
     opacity: 1;
   }
 }
-

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import UUID
 
+import structlog
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,17 +11,33 @@ from events import event_bus
 from models import Claim, ClaimStatus, Policy, PolicyStatus
 from services.argus.fraud_pipeline import ArgusFraudPipeline
 from services.argus.layer0_rules import Layer0ClaimData
-from services.hermes.settlement import process_settlement
+from services.hermes.settlement import _settle_claim_background
 from services.id_gen import generate_claim_number
+from services.sentinelle.trigger_monitor import trigger_monitor
+
+logger = structlog.get_logger("soteria.claims_orchestrator")
 
 
-async def get_latest_active_policy(db: AsyncSession, worker_id) -> Policy | None:
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+async def get_latest_active_policy(db: AsyncSession, worker_id: UUID) -> Policy | None:
     stmt = select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at))
     policy = (await db.execute(stmt)).scalars().first()
     if not policy:
         return None
     if policy.status != PolicyStatus.active:
         return None
+
+    if policy.expires_at and _as_aware_utc(policy.expires_at) < datetime.now(timezone.utc):
+        policy.status = PolicyStatus.lapsed
+        await db.commit()
+        logger.info("policy_auto_lapsed", policy_id=str(policy.id), worker_id=str(worker_id))
+        return None
+
     return policy
 
 
@@ -38,8 +56,17 @@ async def orchestrate_claim_for_worker(
     policy = await get_latest_active_policy(db, worker.id)
     if not policy:
         return None, {"reason": "no_active_policy"}
+    expires_at = policy.expires_at
+    if expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            return None, {"reason": "policy_expired"}
+    if policy.status != PolicyStatus.active:
+        return None, {"reason": "policy_not_active"}
 
     argus = ArgusFraudPipeline()
+    claim_number = generate_claim_number()
     fraud = await argus.evaluate(
         db,
         worker,
@@ -52,10 +79,11 @@ async def orchestrate_claim_for_worker(
             typical_shift_start=typical_shift_start,
             typical_shift_end=typical_shift_end,
         ),
+        claim_number=claim_number,
     )
 
     claim = Claim(
-        claim_number=generate_claim_number(),
+        claim_number=claim_number,
         worker_id=worker.id,
         policy_id=policy.id,
         trigger_id=trigger.id,
@@ -83,12 +111,31 @@ async def orchestrate_claim_for_worker(
         },
     )
 
-    settlement = await process_settlement(claim, worker, trigger, policy, db)
-    await db.refresh(claim)
+    try:
+        if not trigger_monitor.started:
+            logger.warning("trigger_monitor_not_started_auto_starting")
+            trigger_monitor.start()
+        trigger_monitor.scheduler.add_job(
+            _settle_claim_background,
+            trigger="date",
+            args=[str(claim.id)],
+            id=f"settle_{claim.id}",
+            misfire_grace_time=60,
+            replace_existing=True,
+        )
+    except Exception:
+        logger.exception("settlement_queue_failed", claim_id=str(claim.id), worker_id=str(worker.id))
+        return claim, {
+            "settlement_status": "processing",
+            "attempts": 0,
+            "message": "Settlement queue failed; claim remains in processing state.",
+            "payout_amount": 0.0,
+        }
+
     return claim, {
-        "settlement_status": settlement.status,
-        "attempts": settlement.attempts,
-        "message": settlement.message,
-        "payout_amount": float(claim.payout_amount),
+        "settlement_status": "processing",
+        "attempts": 0,
+        "message": "Settlement queued. Payout will be processed within 60 seconds.",
+        "payout_amount": 0.0,
     }
 

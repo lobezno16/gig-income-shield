@@ -9,9 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_utils import create_access_token, create_refresh_token
+from crypto import encrypt_field
 from constants import ALL_COVERED_PERILS, CITY_POOL_DEFAULTS, CITY_URBAN_TIER, DEFAULT_IRDAI_SANDBOX_ID, H3_ZONES, IRDAI_EXCLUSIONS
 from config import get_settings
 from database import get_db
+from middleware.rate_limit import RateLimitExceeded, rate_limit
 from models import PlanType, Platform, Policy, PolicyStatus, PoolConfig, PremiumRecord, Worker, WorkerTier
 from redis_client import get_redis
 from response import error_response, request_id_from_request, success_response
@@ -55,6 +57,23 @@ async def enroll_worker(
     redis_client=Depends(get_redis),
 ):
     request_id = request_id_from_request(request)
+    try:
+        await rate_limit(
+            key=f"rate:enroll:{payload.phone}",
+            max_requests=3,
+            window_seconds=86400,
+            redis_client=redis_client,
+        )
+    except RateLimitExceeded as exc:
+        response = error_response(
+            code="RATE_LIMITED",
+            message="Too many enrollment attempts. Please try again later.",
+            status_code=429,
+            request_id=request_id,
+        )
+        response.headers["Retry-After"] = str(exc.retry_after_seconds)
+        return response
+
     verified = await consume_phone_verification(payload.phone, payload.otp_token, redis_client)
     if not verified:
         return error_response(
@@ -79,7 +98,7 @@ async def enroll_worker(
             request_id=request_id,
         )
 
-    active_days_30 = 12
+    active_days_30 = min(30, max(0, payload.active_days_30))
     tier = tier_from_active_days(active_days_30)
 
     stmt = select(Worker).where(Worker.phone == payload.phone)
@@ -91,8 +110,9 @@ async def enroll_worker(
         worker.platform_id = payload.platform_worker_id
         worker.city = city
         worker.h3_hex = hex_id
-        worker.upi_id = payload.upi_id
+        worker.upi_id = encrypt_field(payload.upi_id)
         worker.active_days_30 = active_days_30
+        worker.total_deliveries = active_days_30 * 28
         worker.tier = tier
     else:
         worker = Worker(
@@ -102,15 +122,26 @@ async def enroll_worker(
             platform_id=payload.platform_worker_id,
             city=city,
             h3_hex=hex_id,
-            upi_id=payload.upi_id,
+            upi_id=encrypt_field(payload.upi_id),
             tier=tier,
             active_days_30=active_days_30,
             total_deliveries=active_days_30 * 28,
             is_active=True,
         )
         db.add(worker)
-    await db.commit()
-    await db.refresh(worker)
+    await db.flush()
+
+    existing_policies = (
+        await db.execute(
+            select(Policy).where(
+                Policy.worker_id == worker.id,
+                Policy.status == PolicyStatus.active,
+            )
+        )
+    ).scalars().all()
+    for old_policy in existing_policies:
+        old_policy.status = PolicyStatus.lapsed
+    await db.flush()
 
     plan = PlanType(payload.plan)
     athena = AthenaPremiumEngine(db)
@@ -136,8 +167,7 @@ async def enroll_worker(
         irdai_sandbox_id=DEFAULT_IRDAI_SANDBOX_ID,
     )
     db.add(policy)
-    await db.commit()
-    await db.refresh(policy)
+    await db.flush()
 
     record = PremiumRecord(
         worker_id=worker.id,
@@ -152,6 +182,8 @@ async def enroll_worker(
     )
     db.add(record)
     await db.commit()
+    await db.refresh(worker)
+    await db.refresh(policy)
 
     shap_top = sorted(
         [(k, v) for k, v in premium.shap_values.items() if isinstance(v, (float, int))],
@@ -210,8 +242,8 @@ async def enroll_worker(
         },
     }
 
-    access_token = create_access_token(subject=str(worker.id), role=worker.role.value, phone=worker.phone)
-    refresh_token = create_refresh_token(subject=str(worker.id), role=worker.role.value, phone=worker.phone)
+    access_token = create_access_token(subject=str(worker.id), role=worker.role.value)
+    refresh_token = create_refresh_token(subject=str(worker.id), role=worker.role.value)
     response = JSONResponse(content=success_response(data, request_id=request_id))
     response.set_cookie(
         key="soteria_auth",

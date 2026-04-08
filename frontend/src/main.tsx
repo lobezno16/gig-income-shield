@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 
 import App from "./App";
+import { getMe } from "./api/auth";
 import { useWorkerStore } from "./store/workerStore";
 import "./main.css";
 
@@ -13,35 +14,61 @@ function SessionLoadingScreen() {
   return (
     <main className="session-loader">
       <style>{`
-        @keyframes soteria-shimmer {
-          0% { background-position: -240px 0; }
-          100% { background-position: 240px 0; }
+        @keyframes soteria-spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
         }
       `}</style>
       <section className="session-loader__content">
         <p className="session-loader__wordmark">Soteria</p>
-        <div className="session-loader__stack">
-          <div className="session-loader__line" />
-          <div className="session-loader__line session-loader__line--short" />
-          <div className="session-loader__line session-loader__line--medium" />
-        </div>
+        <div
+          style={{
+            width: 38,
+            height: 38,
+            borderRadius: "50%",
+            border: "3px solid rgba(255,255,255,0.12)",
+            borderTopColor: "var(--accent)",
+            margin: "0 auto",
+            animation: "soteria-spin 0.9s linear infinite",
+          }}
+        />
       </section>
     </main>
   );
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
-  const restoreSession = useWorkerStore((state) => state.restoreSession);
-  const isLoading = useWorkerStore((state) => state.isLoading);
-  const hasRequestedSession = useRef(false);
+  const currentWorker = useWorkerStore((state) => state.currentWorker);
+  const setCurrentWorker = useWorkerStore((state) => state.setCurrentWorker);
+  const clearAuth = useWorkerStore((state) => state.clearAuth);
+  const setIsLoading = useWorkerStore((state) => state.setIsLoading);
+  const [isBootstrapped, setIsBootstrapped] = useState(false);
+  const hasStartedBootstrap = useRef(false);
 
   useEffect(() => {
-    if (hasRequestedSession.current) return;
-    hasRequestedSession.current = true;
-    void restoreSession();
-  }, [restoreSession]);
+    if (hasStartedBootstrap.current) return;
+    hasStartedBootstrap.current = true;
 
-  if (isLoading) {
+    const run = async () => {
+      setIsLoading(true);
+      const worker = await getMe();
+      const hasPersistedWorker = currentWorker !== null || Boolean(window.localStorage.getItem("soteria_worker_v1"));
+
+      if (worker) {
+        setCurrentWorker(worker);
+      } else if (hasPersistedWorker) {
+        clearAuth();
+        window.localStorage.removeItem("soteria_worker_v1");
+      }
+
+      setIsLoading(false);
+      setIsBootstrapped(true);
+    };
+
+    void run();
+  }, [clearAuth, currentWorker, setCurrentWorker, setIsLoading]);
+
+  if (!isBootstrapped) {
     return <SessionLoadingScreen />;
   }
 

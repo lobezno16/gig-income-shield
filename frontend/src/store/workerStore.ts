@@ -1,34 +1,10 @@
-import axios from "axios";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
-import { getMe } from "../api/client";
-import type { Plan, PolicyStatus, Platform, Tier, UserRole, Worker } from "../types";
+import type { Worker } from "../types";
 
 const WORKER_STORE_KEY = "soteria_worker_v1";
 type WorkerStatus = "covered" | "alert" | "processing" | "action_req" | "inactive";
-
-interface MePolicyPayload {
-  plan: Plan;
-  weekly_premium: number;
-  max_payout_week: number;
-  policy_number: string;
-  status: PolicyStatus;
-}
-
-interface MePayload {
-  id: string;
-  name: string;
-  phone: string;
-  platform: Platform;
-  city: string;
-  h3_hex: string;
-  upi_id: string | null;
-  tier: Tier;
-  active_days_30: number;
-  role: UserRole;
-  policy: MePolicyPayload | null;
-}
 
 interface WorkerState {
   currentWorker: Worker | null;
@@ -36,7 +12,7 @@ interface WorkerState {
   isLoading: boolean;
   setCurrentWorker: (worker: Worker) => void;
   clearAuth: () => void;
-  restoreSession: () => Promise<void>;
+  setIsLoading: (value: boolean) => void;
   status: WorkerStatus;
   setStatus: (s: WorkerStatus) => void;
 }
@@ -49,74 +25,29 @@ const initialPersistedState: WorkerPersistSlice = {
   status: "inactive",
 };
 
-function toWorkerProfile(payload: MePayload): Worker {
-  return {
-    id: payload.id,
-    name: payload.name,
-    phone: payload.phone,
-    platform: payload.platform,
-    city: payload.city,
-    h3_hex: payload.h3_hex,
-    upi_id: payload.upi_id ?? "",
-    tier: payload.tier,
-    active_days_30: payload.active_days_30,
-    plan: payload.policy?.plan ?? "standard",
-    weekly_premium: Number(payload.policy?.weekly_premium ?? 0),
-    max_payout_week: Number(payload.policy?.max_payout_week ?? 0),
-    policy_number: payload.policy?.policy_number,
-    policy_status: payload.policy?.status,
-    role: payload.role,
-  };
-}
-
 export const useWorkerStore = create<WorkerState>()(
   persist(
     (set) => ({
       ...initialPersistedState,
-      isLoading: true,
+      isLoading: false,
       setCurrentWorker: (worker) =>
         set({
           currentWorker: worker,
           isAuthenticated: true,
           isLoading: false,
-          status: "covered",
+          status: worker.policy_status === "active" ? "covered" : "inactive",
         }),
       clearAuth: () =>
-        set({
-          ...initialPersistedState,
-          isLoading: false,
-        }),
-      restoreSession: async () => {
-        set({ isLoading: true });
-        try {
-          const response = await getMe();
-          const me = response?.data as MePayload | undefined;
-          if (!me || !me.id) {
-            set({ isLoading: false });
-            return;
+        set(() => {
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(WORKER_STORE_KEY);
           }
-
-          set({
-            currentWorker: toWorkerProfile(me),
-            isAuthenticated: true,
+          return {
+            ...initialPersistedState,
             isLoading: false,
-            status: me.policy?.status === "active" ? "covered" : "inactive",
-          });
-        } catch (error) {
-          if (axios.isAxiosError(error) && error.response?.status === 401) {
-            if (typeof window !== "undefined") {
-              window.localStorage.removeItem(WORKER_STORE_KEY);
-            }
-            set({
-              ...initialPersistedState,
-              isLoading: false,
-            });
-            return;
-          }
-
-          set({ isLoading: false });
-        }
-      },
+          };
+        }),
+      setIsLoading: (value) => set({ isLoading: value }),
       setStatus: (status) => set({ status }),
     }),
     {

@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import ARRAY, Boolean, DateTime, Enum, ForeignKey, Integer, Numeric, String, text
@@ -28,7 +28,7 @@ class PoolConfig(Base):
     pool_id: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
     is_enrollment_suspended: Mapped[bool] = mapped_column(Boolean, default=False)
     suspension_reason: Mapped[str | None] = mapped_column(String(255))
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class Policy(Base):
@@ -54,4 +54,3 @@ class Policy(Base):
     worker = relationship("Worker", back_populates="policies")
     claims = relationship("Claim", back_populates="policy")
     premiums = relationship("PremiumRecord", back_populates="policy")
-

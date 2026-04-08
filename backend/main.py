@@ -1,27 +1,49 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from uuid import uuid4
 
 import structlog
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from config import get_settings
 from logging_config import setup_logging
 from redis_client import close_redis
 from response import error_response
 from routers import admin, analytics, auth, claims, misc, ml, policy, premium, registration, triggers
-from services.sentinelle.trigger_monitor import TriggerMonitor
+from services.sentinelle.trigger_monitor import trigger_monitor
 
 settings = get_settings()
 setup_logging()
 logger = structlog.get_logger("soteria-api")
-trigger_monitor = TriggerMonitor()
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.environment == "production" and "*" in settings.allowed_origins:
+        raise RuntimeError("Wildcard CORS origin not permitted in production")
+    logger.info("startup", environment=settings.environment)
+    trigger_monitor.start()
+    yield
+    trigger_monitor.stop()
+    await close_redis()
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title=settings.app_name, version=settings.api_version)
+    app = FastAPI(title=settings.app_name, version=settings.api_version, lifespan=lifespan)
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
@@ -84,17 +106,6 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"ok": True, "service": "soteria-api"}
-
-    @app.on_event("startup")
-    async def on_startup():
-        if settings.environment == "production" and "*" in settings.allowed_origins:
-            raise RuntimeError("Wildcard CORS origin is not permitted in production")
-        logger.info("startup", environment=settings.environment)
-        trigger_monitor.start()
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        await close_redis()
 
     return app
 

@@ -46,16 +46,16 @@ export const MOCK_WORKERS: Worker[] = [
 ];
 
 export const H3_ZONES = {
-  "872a1072bffffff": { city: "delhi", area: "dwarka_janakpuri", urban_tier: 1, pool: "delhi_aqi_pool" },
-  "872a1078bffffff": { city: "delhi", area: "rohini_pitampura", urban_tier: 1, pool: "delhi_aqi_pool" },
-  "872a10749ffffff": { city: "delhi", area: "lajpat_nagar", urban_tier: 1, pool: "delhi_aqi_pool" },
-  "872be924bffffff": { city: "mumbai", area: "dharavi_kurla", urban_tier: 1, pool: "mumbai_rain_pool" },
-  "872be9243ffffff": { city: "mumbai", area: "bandra_andheri", urban_tier: 1, pool: "mumbai_rain_pool" },
-  "874d44473ffffff": { city: "chennai", area: "velachery_tambaram", urban_tier: 1, pool: "chennai_rain_pool" },
-  "874d444b3ffffff": { city: "chennai", area: "anna_nagar", urban_tier: 1, pool: "chennai_rain_pool" },
-  "872d9e6c3ffffff": { city: "bangalore", area: "koramangala_hsr", urban_tier: 1, pool: "bangalore_mixed_pool" },
-  "872d9e6dbffffff": { city: "bangalore", area: "whitefield_marathahalli", urban_tier: 1, pool: "bangalore_mixed_pool" },
-  "8730e88abffffff": { city: "kolkata", area: "salt_lake_newtown", urban_tier: 4, pool: "kolkata_flood_pool" },
+  "872a1072bffffff": { city: "delhi", area: "dwarka_janakpuri", area_display: "Dwarka & Janakpuri", urban_tier: 1, pool: "delhi_aqi_pool" },
+  "872a1078bffffff": { city: "delhi", area: "rohini_pitampura", area_display: "Rohini & Pitampura", urban_tier: 1, pool: "delhi_aqi_pool" },
+  "872a10749ffffff": { city: "delhi", area: "lajpat_nagar", area_display: "Lajpat Nagar", urban_tier: 1, pool: "delhi_aqi_pool" },
+  "872be924bffffff": { city: "mumbai", area: "dharavi_kurla", area_display: "Dharavi & Kurla", urban_tier: 1, pool: "mumbai_rain_pool" },
+  "872be9243ffffff": { city: "mumbai", area: "bandra_andheri", area_display: "Bandra & Andheri", urban_tier: 1, pool: "mumbai_rain_pool" },
+  "874d44473ffffff": { city: "chennai", area: "velachery_tambaram", area_display: "Velachery & Tambaram", urban_tier: 1, pool: "chennai_rain_pool" },
+  "874d444b3ffffff": { city: "chennai", area: "anna_nagar", area_display: "Anna Nagar", urban_tier: 1, pool: "chennai_rain_pool" },
+  "872d9e6c3ffffff": { city: "bangalore", area: "koramangala_hsr", area_display: "Koramangala & HSR", urban_tier: 1, pool: "bangalore_mixed_pool" },
+  "872d9e6dbffffff": { city: "bangalore", area: "whitefield_marathahalli", area_display: "Whitefield & Marathahalli", urban_tier: 1, pool: "bangalore_mixed_pool" },
+  "8730e88abffffff": { city: "kolkata", area: "salt_lake_newtown", area_display: "Salt Lake & New Town", urban_tier: 4, pool: "kolkata_flood_pool" },
 } as const;
 
 export const MOCK_TRIGGER_EVENTS: TriggerEventItem[] = [
@@ -237,4 +237,3 @@ for (let i = 0; i < names.length; i += 1) {
     max_payout_week: plan === "pro" ? 1200 : plan === "standard" ? 700 : 400,
   });
 }
-

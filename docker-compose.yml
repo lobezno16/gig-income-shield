@@ -16,6 +16,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - soteria_internal
 
   redis:
     image: redis:7-alpine
@@ -27,17 +29,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - soteria_internal
 
   api:
     build: ./backend
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     environment:
       DATABASE_URL: postgresql+asyncpg://soteria:${POSTGRES_PASSWORD:-soteriaSecurePass2026}@db:5432/soteria_db
       REDIS_URL: redis://redis:6379/0
       SECRET_KEY: ${SECRET_KEY}
-      ENVIRONMENT: production
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
       AUTO_SEED: ${AUTO_SEED:-true}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
@@ -52,12 +54,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    networks:
+      - soteria_internal
 
   frontend:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "5173:80"
+      - "80:80"
     depends_on:
       api:
         condition: service_healthy
@@ -66,6 +70,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    networks:
+      - soteria_internal
 
 volumes:
   postgres_data:
+
+networks:
+  soteria_internal:
+    driver: bridge

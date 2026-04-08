@@ -1,13 +1,15 @@
 from uuid import UUID
 
+import redis.asyncio as aioredis
 from fastapi import Cookie, Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth_utils import decode_token
+from auth_utils import decode_token, is_token_blacklisted
 from database import get_db
 from models import UserRole, Worker
+from redis_client import get_redis
 
 security = HTTPBearer(auto_error=False)
 
@@ -17,15 +19,18 @@ async def get_current_worker(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     cookie_token: str | None = Cookie(default=None, alias="soteria_auth"),
     db: AsyncSession = Depends(get_db),
+    redis_client: aioredis.Redis = Depends(get_redis),
 ) -> Worker:
     """Validates JWT, returns the Worker ORM object. Raises 401 if invalid."""
     token = credentials.credentials if credentials else cookie_token
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
 
-    payload = decode_token(token, expected_purpose="access")
+    payload = await decode_token(token, expected_purpose="access")
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid authentication credentials")
+    if await is_token_blacklisted(payload, redis_client):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
 
     subject = payload.get("sub")
     if not subject:
