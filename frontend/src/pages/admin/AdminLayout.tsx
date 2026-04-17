@@ -7,6 +7,7 @@ import {
   LayoutDashboard,
   LogOut,
   Map,
+  TrendingUp,
 } from "lucide-react";
 import type { PropsWithChildren } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
@@ -23,6 +24,7 @@ interface AdminLink {
 const links: AdminLink[] = [
   { to: "/admin", label: "Overview", icon: LayoutDashboard },
   { to: "/admin/bcr", label: "BCR Monitor", icon: BarChart2 },
+  { to: "/admin/forecast", label: "Forecast", icon: TrendingUp },
   { to: "/admin/claims", label: "Claims Queue", icon: ClipboardList },
   { to: "/admin/heatmap", label: "H3 Heatmap", icon: Map },
   { to: "/admin/fraud", label: "Fraud Alerts", icon: AlertOctagon },

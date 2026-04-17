@@ -38,5 +38,4 @@ class PremiumHistoryItem(BaseModel):
 class PredictiveCoverageRequest(BaseModel):
     worker_id: str
     days_requested: int
-    peril: Literal["aqi", "rain", "heat", "flood", "storm", "curfew", "store"]
-
+    peril: Literal["aqi", "rain", "curfew"]

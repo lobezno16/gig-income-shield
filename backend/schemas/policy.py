@@ -23,6 +23,9 @@ class PolicyCompliance(BaseModel):
     product_type: str = "parametric_income_protection"
     exclusions_version: str = "v2.1"
     exclusions: list[str]
+    loss_scope: str = "loss_of_income_only"
+    billing_cadence: str = "weekly"
+    peril_trigger_rules: dict[str, str] = {}
 
 
 class PremiumThisWeek(BaseModel):
@@ -52,4 +55,3 @@ class PolicyResponseBody(BaseModel):
 
 class UpdatePlanRequest(BaseModel):
     plan: Literal["lite", "standard", "pro"]
-

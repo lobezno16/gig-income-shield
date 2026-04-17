@@ -26,11 +26,7 @@ CITY_FACTORS = {
 PERIL_FACTORS = {
     "aqi": 0.90,
     "rain": 1.00,
-    "heat": 0.85,
-    "flood": 1.10,
-    "storm": 0.95,
     "curfew": 1.05,
-    "store": 0.85,
 }
 
 TIER_FACTORS = {"gold": 0.85, "silver": 1.00, "bronze": 1.15, "restricted": 1.30}
@@ -47,14 +43,14 @@ POOL_PRIMARY_PERIL = {
     "delhi_aqi_pool": "aqi",
     "mumbai_rain_pool": "rain",
     "chennai_rain_pool": "rain",
-    "bangalore_mixed_pool": "storm",
-    "kolkata_flood_pool": "flood",
+    "bangalore_mixed_pool": "curfew",
+    "kolkata_flood_pool": "rain",
     "lucknow_aqi_pool": "aqi",
     "pune_rain_pool": "rain",
-    "ahmedabad_heat_pool": "heat",
-    "hyderabad_heat_pool": "heat",
-    "jaipur_heat_pool": "heat",
-    "nagpur_heat_pool": "heat",
+    "ahmedabad_heat_pool": "aqi",
+    "hyderabad_heat_pool": "aqi",
+    "jaipur_heat_pool": "aqi",
+    "nagpur_heat_pool": "aqi",
 }
 
 
@@ -127,4 +123,3 @@ class AthenaPremiumEngine:
             peril=primary_peril,
             features=features,
         )
-

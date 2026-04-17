@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from config import get_settings
+from constants import BILLING_CADENCE, LOSS_SCOPE, PRODUCT_CODE, SUPPORTED_PARAMETRIC_PERILS
 from database import get_db
 from dependencies import require_admin
 from models import BCRRecord, Claim, ClaimStatus, Policy, PolicyStatus, PremiumRecord, Worker
@@ -15,10 +17,50 @@ from response import error_response, request_id_from_request, success_response
 from services.pythia.stress_test import SCENARIOS, run_stress_scenario
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+settings = get_settings()
 
 
 class StressTestRequest(BaseModel):
     scenario: str
+
+
+@router.get("/integration-health")
+async def integration_health(request: Request, _admin: Worker = Depends(require_admin)):
+    request_id = request_id_from_request(request)
+    return success_response(
+        {
+            "product": {
+                "product_code": PRODUCT_CODE,
+                "loss_scope": LOSS_SCOPE,
+                "billing_cadence": BILLING_CADENCE,
+                "supported_perils": list(SUPPORTED_PARAMETRIC_PERILS),
+                "zero_touch_claims": True,
+            },
+            "oracles": {
+                "weather": {
+                    "source": "openweather",
+                    "mode": "live" if settings.has_real_weather_data else "mock_fallback",
+                    "configured": settings.has_real_weather_data,
+                },
+                "traffic": {
+                    "source": "tomtom",
+                    "mode": "live" if settings.has_real_traffic_data else "mock_fallback",
+                    "configured": settings.has_real_traffic_data,
+                },
+                "air_quality": {
+                    "source": "cpcb_or_waqi",
+                    "mode": "live" if settings.has_real_aqi_data else "mock_fallback",
+                    "configured": settings.has_real_aqi_data,
+                },
+            },
+            "payments": {
+                "provider": settings.payment_provider,
+                "mode": "sandbox",
+                "idempotency": "event_id_plus_worker_id",
+            },
+        },
+        request_id=request_id,
+    )
 
 
 def _bcr_status(bcr: float) -> str:

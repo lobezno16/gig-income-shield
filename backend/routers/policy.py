@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from constants import IRDAI_EXCLUSIONS
+from constants import BILLING_CADENCE, IRDAI_EXCLUSIONS, LOSS_SCOPE, PERIL_TRIGGER_RULES, PRODUCT_CODE
 from database import get_db
 from dependencies import get_current_worker
 from models import PlanType, Policy, PolicyStatus, PremiumRecord, Worker
@@ -59,9 +59,12 @@ def _policy_payload(policy: Policy, worker: Worker, premium_record: PremiumRecor
         },
         "irdai_compliance": {
             "sandbox_id": policy.irdai_sandbox_id,
-            "product_type": "parametric_income_protection",
+            "product_type": PRODUCT_CODE,
             "exclusions_version": "v2.1",
             "exclusions": IRDAI_EXCLUSIONS,
+            "loss_scope": LOSS_SCOPE,
+            "billing_cadence": BILLING_CADENCE,
+            "peril_trigger_rules": PERIL_TRIGGER_RULES,
         },
         "premium_this_week": {
             "amount_inr": float(policy.weekly_premium),

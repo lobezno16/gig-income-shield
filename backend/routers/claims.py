@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from config import get_settings
 from database import get_db
 from dependencies import get_current_worker
 from middleware.rate_limit import RateLimitExceeded, rate_limit
@@ -20,6 +21,7 @@ from schemas.claim import CreateClaimRequest
 from services.claims_orchestrator import orchestrate_claim_for_worker
 
 router = APIRouter(prefix="/api", tags=["claims"])
+settings = get_settings()
 
 
 def _is_owner(current_worker: Worker, worker_id: str) -> bool:
@@ -27,6 +29,22 @@ def _is_owner(current_worker: Worker, worker_id: str) -> bool:
         return current_worker.id == UUID(worker_id)
     except ValueError:
         return False
+
+
+def _parse_settlement_refs(ref_value: str | None) -> tuple[str | None, str | None]:
+    if not ref_value:
+        return None, None
+    if "|" in ref_value:
+        payout_id, bank_ref = ref_value.split("|", 1)
+        return payout_id or None, bank_ref or None
+    return ref_value, None
+
+
+def _can_use_manual_claim_entry(current_worker: Worker) -> bool:
+    # Zero-touch is the production default.
+    # Manual claim creation remains available only for controlled admin QA in development.
+    role = current_worker.role.value if hasattr(current_worker.role, "value") else str(current_worker.role)
+    return settings.environment == "development" and role in {"admin", "superadmin"}
 
 
 def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[dict]:
@@ -38,6 +56,7 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
     fallback_confirmed = created + timedelta(seconds=180)
     confirmed_time = claim.settled_at.astimezone(timezone.utc) if claim.settled_at else fallback_confirmed
     final_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
+    payout_ref, _bank_ref = _parse_settlement_refs(claim.upi_ref)
     all_steps = [
         {
             "id": "trigger_detected",
@@ -48,13 +67,13 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
         {
             "id": "eligibility_check",
             "label": "Eligibility Verified",
-            "description": "Active policy · Warranty met · Zone confirmed",
+            "description": "Active policy | Warranty met | Zone confirmed",
             "timestamp": eligibility_time.isoformat(),
         },
         {
             "id": "fraud_check",
             "label": "Verification Complete",
-            "description": f"ARGUS complete · score {float(claim.fraud_score or 0):.2f}",
+            "description": f"ARGUS complete | score {float(claim.fraud_score or 0):.2f}",
             "timestamp": fraud_time.isoformat(),
         },
         {
@@ -72,7 +91,7 @@ def build_claim_timeline(claim: Claim, worker: Worker, amount: float) -> list[di
         {
             "id": "confirmed",
             "label": "Payment Confirmed",
-            "description": f"UPI Ref: {claim.upi_ref or 'PENDING'}",
+            "description": f"UPI Ref: {payout_ref or 'PENDING'}",
             "timestamp": confirmed_time.isoformat(),
         },
     ]
@@ -116,6 +135,7 @@ async def get_claims(
         worker = c.worker
         if worker is None:
             continue
+        payout_ref, bank_ref = _parse_settlement_refs(c.upi_ref)
         result.append(
             {
                 "id": str(c.id),
@@ -127,6 +147,9 @@ async def get_claims(
                 "fraud_flags": c.fraud_flags or [],
                 "argus_layers": c.argus_layers or {},
                 "timeline": build_claim_timeline(c, worker, float(c.payout_amount)),
+                "upi_ref": payout_ref,
+                "bank_ref": bank_ref,
+                "settlement_channel": "Razorpay UPI Test Mode",
                 "created_at": c.created_at.isoformat(),
                 "settled_at": c.settled_at.isoformat() if c.settled_at else None,
             }
@@ -156,6 +179,7 @@ async def get_claim_detail(
         return error_response("NOT_FOUND", "Claim not found.", status_code=404, request_id=request_id)
     if claim.worker is None:
         return error_response("NOT_FOUND", "Claim worker not found.", status_code=404, request_id=request_id)
+    payout_ref, bank_ref = _parse_settlement_refs(claim.upi_ref)
     return success_response(
         {
             "id": str(claim.id),
@@ -167,6 +191,9 @@ async def get_claim_detail(
             "fraud_flags": claim.fraud_flags or [],
             "argus_layers": claim.argus_layers or {},
             "timeline": build_claim_timeline(claim, claim.worker, float(claim.payout_amount)),
+            "upi_ref": payout_ref,
+            "bank_ref": bank_ref,
+            "settlement_channel": "Razorpay UPI Test Mode",
             "created_at": claim.created_at.isoformat(),
             "settled_at": claim.settled_at.isoformat() if claim.settled_at else None,
         },
@@ -183,8 +210,13 @@ async def create_claim(
     db: AsyncSession = Depends(get_db),
 ):
     request_id = request_id_from_request(request)
-    if str(current_worker.id) != payload.worker_id:
-        return error_response("FORBIDDEN", "You are not authorized to create claims for another worker.", status_code=403, request_id=request_id)
+    if not _can_use_manual_claim_entry(current_worker):
+        return error_response(
+            "ZERO_TOUCH_ENFORCED",
+            "Manual claim filing is disabled. Claims are auto-created by trigger engine only.",
+            status_code=403,
+            request_id=request_id,
+        )
 
     try:
         await rate_limit(
@@ -221,9 +253,13 @@ async def create_claim(
         timestamp=payload.timestamp,
         typical_shift_start=payload.typical_shift_start,
         typical_shift_end=payload.typical_shift_end,
+        device_telemetry=payload.device_telemetry.model_dump() if payload.device_telemetry else None,
+        recent_h3_pings=[ping.model_dump() for ping in payload.recent_h3_pings],
+        oracle_snapshot=payload.oracle_snapshot.model_dump() if payload.oracle_snapshot else None,
     )
     if claim is None:
         return error_response("NOT_ELIGIBLE", "Worker does not have an active policy.", status_code=400, request_id=request_id)
+    payout_ref, bank_ref = _parse_settlement_refs(claim.upi_ref)
 
     return success_response(
         {
@@ -236,7 +272,9 @@ async def create_claim(
                 "status": settlement_info["settlement_status"],
                 "attempts": settlement_info["attempts"],
                 "message": settlement_info["message"],
-                "upi_ref": claim.upi_ref,
+                "upi_ref": payout_ref,
+                "bank_ref": bank_ref,
+                "settlement_channel": "Razorpay UPI Test Mode",
             },
         },
         request_id=request_id,

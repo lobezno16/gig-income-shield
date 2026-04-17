@@ -56,13 +56,13 @@ function inferScenario(poolId: string): string {
   if (value.includes("rain") || value.includes("flood") || value.includes("monsoon")) {
     return "14_day_monsoon";
   }
-  if (value.includes("aqi")) {
+  if (value.includes("aqi") || value.includes("heat")) {
     return "diwali_aqi";
   }
-  if (value.includes("heat")) {
-    return "summer_multiperil";
+  if (value.includes("curfew") || value.includes("traffic") || value.includes("mixed")) {
+    return "flash_strike_wave";
   }
-  return "flash_strike_wave";
+  return "summer_multiperil";
 }
 
 export function BCRDashboardPage() {

@@ -30,7 +30,7 @@ def layer1_trust_score(signal_data: SignalData, peril: str) -> tuple[float, dict
     }
 
     gps_accuracy_score = 1.0
-    if peril in ["rain", "flood", "storm"]:
+    if peril in ["rain"]:
         if signal_data.gps_accuracy_meters > 12:
             gps_accuracy_score = 1.0
         elif signal_data.gps_accuracy_meters < 6:
@@ -57,4 +57,3 @@ def layer1_trust_score(signal_data: SignalData, peril: str) -> tuple[float, dict
 
     trust = sum(signal_scores[k] * weights[k] for k in signal_scores.keys())
     return round(trust, 4), signal_scores
-

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, CloudRain, Droplets, Lock, Store, Thermometer, Wind, Zap } from "lucide-react";
+import { Check, CloudRain, Lock, Wind } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -44,13 +44,9 @@ interface PolicyPagePayload {
 }
 
 const perilCatalog = [
-  { key: "rain", label: "Heavy Rain", description: "Heavy rainfall above 50mm/day", icon: CloudRain },
-  { key: "aqi", label: "Air Quality", description: "Air quality index above 300", icon: Wind },
-  { key: "heat", label: "Extreme Heat", description: "Temperature above 42C", icon: Thermometer },
-  { key: "flood", label: "Flood Alert", description: "Flood alert Level 1+", icon: Droplets },
-  { key: "storm", label: "Storm Winds", description: "Storm winds above 50km/h", icon: Zap },
-  { key: "curfew", label: "Curfew", description: "Unplanned area lockdown", icon: Lock },
-  { key: "store", label: "Store Closure", description: "65%+ dark-store closure in your zone", icon: Store },
+  { key: "rain", label: "Heavy Rain", description: "Trigger when rainfall exceeds 15 mm/hr", icon: CloudRain },
+  { key: "curfew", label: "Roadblocks / Curfew", description: "Trigger when delays exceed 40 min per km", icon: Lock },
+  { key: "aqi", label: "Hazardous AQI", description: "Trigger when AQI exceeds 450", icon: Wind },
 ] as const;
 
 const planOverview: Record<Plan, { premiumRange: string; maxPayout: string; coverageDays: string }> = {

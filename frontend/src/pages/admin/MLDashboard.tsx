@@ -41,7 +41,7 @@ interface ModelStatus {
   training_samples: number;
 }
 
-const perilOptions = ["rain", "aqi", "heat", "flood", "storm", "curfew", "store"];
+const perilOptions = ["rain", "aqi", "curfew"];
 
 export function MLDashboardPage() {
   const queryClient = useQueryClient();
@@ -126,7 +126,7 @@ export function MLDashboardPage() {
             <p className="admin-ml-status-card__value">{(modelStatus?.mae ?? 1.72).toFixed(2)}</p>
           </div>
           <div>
-            <p className="admin-ml-status-card__label">R²</p>
+            <p className="admin-ml-status-card__label">R2</p>
             <p className="admin-ml-status-card__value">{(modelStatus?.r2 ?? 0.81).toFixed(2)}</p>
           </div>
           <div>
@@ -229,7 +229,7 @@ export function MLDashboardPage() {
             <strong>{(modelStatus?.mae ?? 1.72).toFixed(2)}</strong>
           </div>
           <div className="surface admin-model-health-card">
-            <p>R²</p>
+            <p>R2</p>
             <strong>{(modelStatus?.r2 ?? 0.81).toFixed(2)}</strong>
           </div>
         </div>

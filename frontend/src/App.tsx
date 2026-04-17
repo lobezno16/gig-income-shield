@@ -5,12 +5,19 @@ import { InstallAppPrompt } from "./components/InstallAppPrompt";
 import { useWorkerStore } from "./store/workerStore";
 
 const RegistrationPage = lazy(() => import("./pages/worker/Registration").then((m) => ({ default: m.RegistrationPage })));
+const LandingPage = lazy(() => import("./pages/Landing").then((m) => ({ default: m.default })));
 const WorkerDashboardPage = lazy(() => import("./pages/worker/Dashboard").then((m) => ({ default: m.WorkerDashboardPage })));
 const WorkerPolicyPage = lazy(() => import("./pages/worker/Policy").then((m) => ({ default: m.WorkerPolicyPage })));
 const WorkerPremiumPage = lazy(() => import("./pages/worker/Premium").then((m) => ({ default: m.WorkerPremiumPage })));
 const WorkerClaimsPage = lazy(() => import("./pages/worker/Claims").then((m) => ({ default: m.WorkerClaimsPage })));
+const PayoutSimulatorPage = lazy(() =>
+  import("./pages/worker/PayoutSimulator").then((m) => ({ default: m.PayoutSimulatorPage }))
+);
 const AdminOverviewPage = lazy(() => import("./pages/admin/Overview").then((m) => ({ default: m.AdminOverviewPage })));
 const BCRDashboardPage = lazy(() => import("./pages/admin/BCRDashboard").then((m) => ({ default: m.BCRDashboardPage })));
+const ForecastDashboardPage = lazy(() =>
+  import("./pages/admin/ForecastDashboard").then((m) => ({ default: m.ForecastDashboardPage }))
+);
 const HexHeatmapPage = lazy(() => import("./pages/admin/HexHeatmap").then((m) => ({ default: m.HexHeatmapPage })));
 const ClaimsQueuePage = lazy(() => import("./pages/admin/ClaimsQueue").then((m) => ({ default: m.ClaimsQueuePage })));
 const FraudAlertsPage = lazy(() => import("./pages/admin/FraudAlerts").then((m) => ({ default: m.FraudAlertsPage })));
@@ -66,12 +73,13 @@ export default function App() {
       <InstallAppPrompt />
       <div key={location.pathname} className="route-fade">
         <Routes>
-          <Route path="/" element={<Navigate to="/register" replace />} />
+          <Route path="/" element={<LandingPage />} />
           <Route path="/register" element={<RegistrationPage />} />
           <Route path="/dashboard" element={<WorkerDashboardPage />} />
           <Route path="/policy" element={<WorkerPolicyPage />} />
           <Route path="/premium" element={<WorkerPremiumPage />} />
           <Route path="/claims" element={<WorkerClaimsPage />} />
+          <Route path="/simulate" element={<PayoutSimulatorPage />} />
           <Route
             path="/admin"
             element={
@@ -85,6 +93,14 @@ export default function App() {
             element={
               <AdminGuard>
                 <BCRDashboardPage />
+              </AdminGuard>
+            }
+          />
+          <Route
+            path="/admin/forecast"
+            element={
+              <AdminGuard>
+                <ForecastDashboardPage />
               </AdminGuard>
             }
           />

@@ -63,7 +63,7 @@ export function HexHeatmapPage() {
           <h1 className="admin-page-head__title">H3 Heatmap</h1>
           <div className="admin-page-head__meta">
             <select className="input mono" value={peril} onChange={(event) => setPeril(event.target.value)} style={{ width: 180 }}>
-              {["aqi", "rain", "heat", "flood", "storm", "curfew", "store"].map((option) => (
+              {["aqi", "rain", "curfew"].map((option) => (
                 <option key={option} value={option}>
                   {option.toUpperCase()}
                 </option>

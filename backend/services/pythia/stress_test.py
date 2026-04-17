@@ -7,7 +7,7 @@ import numpy as np
 
 SCENARIOS = {
     "14_day_monsoon": {
-        "perils": ["rain", "flood"],
+        "perils": ["rain", "curfew"],
         "duration_days": 14,
         "cities": ["mumbai", "chennai", "kolkata"],
         "rain_distribution": "normal",
@@ -26,15 +26,16 @@ SCENARIOS = {
         "simulations": 10000,
     },
     "summer_multiperil": {
-        "perils": ["heat", "aqi"],
+        "perils": ["rain", "aqi"],
         "duration_days": 7,
-        "cities": ["delhi", "jaipur", "nagpur"],
-        "temp_mean": 46,
+        "cities": ["delhi", "jaipur", "lucknow"],
+        "rain_mean_mm": 22,
+        "rain_std_mm": 8,
         "aqi_mean": 310,
         "simulations": 10000,
     },
     "flash_strike_wave": {
-        "perils": ["curfew", "store"],
+        "perils": ["curfew", "aqi"],
         "duration_days": 1,
         "cities": ["delhi", "mumbai", "bangalore"],
         "simultaneous": True,
@@ -72,7 +73,7 @@ def run_stress_scenario(scenario_name: str, seed: int = 42) -> StressOutput:
         severity = rng.normal(cfg["aqi_mean"], cfg["aqi_std"], sims)
         loss_rate = 0.42 + (severity - cfg["aqi_mean"]) / 500
     elif scenario_name == "summer_multiperil":
-        severity = rng.normal(cfg["temp_mean"], 2.5, sims) + rng.normal(cfg["aqi_mean"], 30, sims) / 100
+        severity = rng.normal(cfg["rain_mean_mm"], cfg["rain_std_mm"], sims) + rng.normal(cfg["aqi_mean"], 30, sims) / 25
         loss_rate = 0.4 + (severity - np.mean(severity)) / 300
     else:
         severity = rng.normal(0.7, 0.15, sims)

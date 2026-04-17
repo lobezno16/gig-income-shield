@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from uuid import UUID
 
 import structlog
@@ -12,12 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal
 from events import event_bus
-from models import Claim, ClaimStatus, Policy, TriggerEvent, Worker
+from models import Claim, Policy, TriggerEvent, Worker
 from services.actuarial.bcr_monitor import update_bcr
 from services.athena.bayesian_updater import BayesianBetaBinomial
-from services.athena.premium_engine import URBAN_TIER_MULTIPLIERS
 from services.hermes.notification import send_settlement_notification
-from services.hermes.upi_mock import UPIResult, mock_upi_transfer
+from services.hermes.payout_service import (
+    IdempotentPayoutResult,
+    encode_upi_ref,
+    execute_idempotent_settlement,
+    payout_pct_from_fraud_status,
+)
+from services.hermes.upi_mock import RazorpayPayoutResult
 
 logger = structlog.get_logger("soteria.settlement")
 
@@ -27,17 +30,10 @@ class SettlementResult:
     status: str
     payout_amount: float
     payout_pct_applied: float
-    upi_result: UPIResult | None = None
+    upi_result: RazorpayPayoutResult | None = None
     attempts: int = 0
     message: str = ""
-
-
-def payout_pct_from_fraud_status(status: str) -> float:
-    if status == "blocked":
-        return 0.0
-    if status == "flagged":
-        return 0.8
-    return 1.0
+    idempotency_key: str | None = None
 
 
 async def process_settlement(
@@ -47,51 +43,20 @@ async def process_settlement(
     policy: Policy,
     db: AsyncSession,
 ) -> SettlementResult:
-    fixed_daily = {"zepto": 1000, "zomato": 950, "swiggy": 900, "blinkit": 980}.get(worker.platform.value, 900)
-    trigger_days = 1
-    urban_multiplier = URBAN_TIER_MULTIPLIERS.get(int(policy.urban_tier), 1.0)
-    base_payout = fixed_daily * trigger_days * float(claim.payout_pct) * urban_multiplier
-    base_payout = min(base_payout, float(policy.max_payout_week))
+    payout_result: IdempotentPayoutResult = await execute_idempotent_settlement(
+        claim=claim,
+        worker=worker,
+        trigger=trigger,
+        policy=policy,
+        db=db,
+    )
 
-    fraud_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
-    payout_multiplier = payout_pct_from_fraud_status(fraud_status)
-    payout_amount = round(base_payout * payout_multiplier, 2)
-
-    if payout_multiplier == 0:
-        claim.payout_amount = payout_amount
-        claim.status = ClaimStatus.blocked
+    if payout_result.status == "paid" and payout_result.upi_result:
+        payout_id = payout_result.upi_result.payout_id or ""
+        bank_ref = payout_result.upi_result.bank_ref or ""
+        claim.upi_ref = encode_upi_ref(payout_id, bank_ref) if payout_id and bank_ref else claim.upi_ref
         await db.commit()
-        return SettlementResult(
-            status="blocked",
-            payout_amount=payout_amount,
-            payout_pct_applied=0.0,
-            message="Blocked by ARGUS for admin review.",
-        )
-
-    attempt = 0
-    transfer_result: UPIResult | None = None
-    for sleep_seconds in [1, 2, 4]:
-        attempt += 1
-        transfer_result = await mock_upi_transfer(worker.upi_id_decrypted or "", payout_amount)
-        if transfer_result.success:
-            break
-        await asyncio.sleep(sleep_seconds)
-    if transfer_result is None:
-        transfer_result = UPIResult(success=False, error="UNKNOWN")
-
-    claim.payout_amount = payout_amount
-    claim.upi_ref = transfer_result.ref_id if transfer_result.success else None
-    if transfer_result.success:
-        claim.status = ClaimStatus.paid
-        claim.settled_at = datetime.now(timezone.utc)
-    else:
-        claim.status = ClaimStatus.processing
-
-    await db.commit()
-    await db.refresh(claim)
-
-    if transfer_result.success:
-        await send_settlement_notification(worker.phone, payout_amount, transfer_result.ref_id or "")
+        await send_settlement_notification(worker.phone, payout_result.payout_amount, payout_id)
         await update_bcr(policy.pool_id, db)
         bayes = BayesianBetaBinomial(db)
         await bayes.update(trigger.h3_hex, trigger.peril.value, trigger_occurred=True)
@@ -102,8 +67,9 @@ async def process_settlement(
                 "claim_id": str(claim.id),
                 "claim_number": claim.claim_number,
                 "status": "paid",
-                "amount": payout_amount,
-                "upi_ref": claim.upi_ref,
+                "amount": payout_result.payout_amount,
+                "upi_ref": payout_id,
+                "bank_ref": bank_ref,
             },
         )
         await event_bus.publish(
@@ -113,12 +79,13 @@ async def process_settlement(
         )
 
     return SettlementResult(
-        status="paid" if transfer_result.success else "processing",
-        payout_amount=payout_amount,
-        payout_pct_applied=payout_multiplier,
-        upi_result=transfer_result,
-        attempts=attempt,
-        message="Settlement completed." if transfer_result.success else "UPI transfer pending after retries.",
+        status=payout_result.status,
+        payout_amount=payout_result.payout_amount,
+        payout_pct_applied=payout_result.payout_pct_applied,
+        upi_result=payout_result.upi_result,
+        attempts=payout_result.attempts,
+        message=payout_result.message,
+        idempotency_key=payout_result.idempotency_key,
     )
 
 
@@ -148,3 +115,4 @@ async def _settle_claim_background(claim_id: str) -> None:
             await process_settlement(claim, claim.worker, claim.trigger, claim.policy, db)
     except Exception:
         logger.exception("background_settlement_failed", claim_id=claim_id)
+

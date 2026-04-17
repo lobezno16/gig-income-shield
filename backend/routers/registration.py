@@ -10,7 +10,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth_utils import create_access_token, create_refresh_token
 from crypto import encrypt_field
-from constants import ALL_COVERED_PERILS, CITY_POOL_DEFAULTS, CITY_URBAN_TIER, DEFAULT_IRDAI_SANDBOX_ID, H3_ZONES, IRDAI_EXCLUSIONS
+from constants import (
+    ALL_COVERED_PERILS,
+    BILLING_CADENCE,
+    CITY_POOL_DEFAULTS,
+    CITY_URBAN_TIER,
+    DEFAULT_IRDAI_SANDBOX_ID,
+    H3_ZONES,
+    IRDAI_EXCLUSIONS,
+    LOSS_SCOPE,
+    PERIL_TRIGGER_RULES,
+    PRODUCT_CODE,
+)
 from config import get_settings
 from database import get_db
 from middleware.rate_limit import RateLimitExceeded, rate_limit
@@ -34,6 +45,17 @@ def tier_from_active_days(days: int) -> WorkerTier:
     if days >= 5:
         return WorkerTier.bronze
     return WorkerTier.restricted
+
+
+def active_hour_window_from_platform(platform: str) -> tuple[int, int]:
+    # Empirical defaults by platform operations; kept simple for fast enrollment UX.
+    if platform == "blinkit":
+        return 7, 23
+    if platform == "zepto":
+        return 8, 23
+    if platform == "swiggy":
+        return 10, 22
+    return 9, 22
 
 
 def resolve_hex_and_zone(latitude: float, longitude: float, city: str) -> tuple[str, dict]:
@@ -100,6 +122,7 @@ async def enroll_worker(
 
     active_days_30 = min(30, max(0, payload.active_days_30))
     tier = tier_from_active_days(active_days_30)
+    shift_start_hour, shift_end_hour = active_hour_window_from_platform(payload.platform)
 
     stmt = select(Worker).where(Worker.phone == payload.phone)
     existing = (await db.execute(stmt)).scalar_one_or_none()
@@ -114,6 +137,8 @@ async def enroll_worker(
         worker.active_days_30 = active_days_30
         worker.total_deliveries = active_days_30 * 28
         worker.tier = tier
+        worker.shift_start_hour = shift_start_hour
+        worker.shift_end_hour = shift_end_hour
     else:
         worker = Worker(
             phone=payload.phone,
@@ -126,6 +151,8 @@ async def enroll_worker(
             tier=tier,
             active_days_30=active_days_30,
             total_deliveries=active_days_30 * 28,
+            shift_start_hour=shift_start_hour,
+            shift_end_hour=shift_end_hour,
             is_active=True,
         )
         db.add(worker)
@@ -218,9 +245,12 @@ async def enroll_worker(
         },
         "irdai_compliance": {
             "sandbox_id": policy.irdai_sandbox_id,
-            "product_type": "parametric_income_protection",
+            "product_type": PRODUCT_CODE,
             "exclusions_version": "v2.1",
             "exclusions": IRDAI_EXCLUSIONS,
+            "loss_scope": LOSS_SCOPE,
+            "billing_cadence": BILLING_CADENCE,
+            "peril_trigger_rules": PERIL_TRIGGER_RULES,
         },
         "premium_this_week": {
             "amount_inr": float(policy.weekly_premium),

@@ -12,6 +12,7 @@ from dependencies import get_current_worker
 from models import PlanType, Platform, Policy, PremiumRecord, Worker, WorkerTier
 from response import error_response, request_id_from_request, success_response
 from schemas.premium import PremiumCalculationRequest, PredictiveCoverageRequest
+from constants import BILLING_CADENCE, LOSS_SCOPE, PRODUCT_CODE, SUPPORTED_PARAMETRIC_PERILS
 from services.athena.premium_engine import AthenaPremiumEngine
 
 router = APIRouter(prefix="/api/premium", tags=["premium"])
@@ -66,6 +67,12 @@ async def get_premium(
                 "Daily income baseline uses platform-level averages for Q-Commerce partners.",
                 "Urban tier multiplier captures disruption duration effects from infrastructure differences.",
             ],
+            "product_constraints": {
+                "product_code": PRODUCT_CODE,
+                "loss_scope": LOSS_SCOPE,
+                "billing_cadence": BILLING_CADENCE,
+                "covered_perils": list(SUPPORTED_PARAMETRIC_PERILS),
+            },
         },
         request_id=request_id,
     )
@@ -156,7 +163,7 @@ async def predictive_coverage(
         return error_response("NOT_FOUND", "Policy not found.", status_code=404, request_id=request_id)
 
     uplift = 0.0
-    if payload.peril in {"rain", "flood", "aqi"}:
+    if payload.peril in {"rain", "aqi", "curfew"}:
         uplift = min(0.25, payload.days_requested / 30)
     extended_premium = float(policy.weekly_premium) * (1 + uplift)
 

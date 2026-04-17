@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any, Mapping
 from uuid import UUID
 
 import structlog
@@ -13,7 +14,6 @@ from services.argus.fraud_pipeline import ArgusFraudPipeline
 from services.argus.layer0_rules import Layer0ClaimData
 from services.hermes.settlement import _settle_claim_background
 from services.id_gen import generate_claim_number
-from services.sentinelle.trigger_monitor import trigger_monitor
 
 logger = structlog.get_logger("soteria.claims_orchestrator")
 
@@ -52,6 +52,9 @@ async def orchestrate_claim_for_worker(
     timestamp: datetime | None = None,
     typical_shift_start: int = 8,
     typical_shift_end: int = 23,
+    device_telemetry: Mapping[str, Any] | None = None,
+    recent_h3_pings: list[Mapping[str, Any]] | None = None,
+    oracle_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[Claim | None, dict]:
     policy = await get_latest_active_policy(db, worker.id)
     if not policy:
@@ -78,6 +81,9 @@ async def orchestrate_claim_for_worker(
             timestamp=timestamp or datetime.now(timezone.utc),
             typical_shift_start=typical_shift_start,
             typical_shift_end=typical_shift_end,
+            device_telemetry=device_telemetry,
+            recent_h3_pings=recent_h3_pings or [],
+            oracle_snapshot=oracle_snapshot,
         ),
         claim_number=claim_number,
     )
@@ -112,6 +118,10 @@ async def orchestrate_claim_for_worker(
     )
 
     try:
+        # Lazy import avoids module import cycle:
+        # trigger_cron -> claims_orchestrator -> trigger_monitor -> trigger_cron
+        from services.sentinelle.trigger_monitor import trigger_monitor
+
         if not trigger_monitor.started:
             logger.warning("trigger_monitor_not_started_auto_starting")
             trigger_monitor.start()

@@ -17,7 +17,7 @@ from constants import ALL_COVERED_PERILS, H3_ZONES
 from database import AsyncSessionLocal
 from ml.synthetic_data import generate_weather_series
 from ml.train import train_models
-from models import BCRRecord, BayesianPosterior, Claim, ClaimStatus, H3RiskProfile, PerilType, PlanType, Platform, Policy, PolicyStatus, PremiumRecord, TriggerEvent, Worker, WorkerTier
+from models import BCRRecord, BayesianPosterior, Claim, ClaimStatus, H3RiskProfile, PerilType, PlanType, Platform, Policy, PolicyStatus, Payout, PremiumRecord, TriggerEvent, Worker, WorkerTier
 from services.id_gen import generate_claim_number, generate_policy_number
 
 
@@ -78,7 +78,7 @@ NAMES = [
 def progress(current: int, total: int, label: str) -> None:
     width = 32
     fill = int(width * current / total)
-    bar = "█" * fill + "░" * (width - fill)
+    bar = "#" * fill + "-" * (width - fill)
     print(f"\r[{bar}] {current:>3}/{total:<3} {label}", end="", flush=True)
     if current == total:
         print()
@@ -94,6 +94,16 @@ def tier_for_days(days: int) -> WorkerTier:
     return WorkerTier.restricted
 
 
+def shift_window_for_platform(platform: str) -> tuple[int, int]:
+    if platform == "blinkit":
+        return 7, 23
+    if platform == "zepto":
+        return 8, 23
+    if platform == "swiggy":
+        return 10, 22
+    return 9, 22
+
+
 async def main() -> None:
     random.seed(42)
     np.random.seed(42)
@@ -104,9 +114,10 @@ async def main() -> None:
 
     async with AsyncSessionLocal() as db:
         # Clear dependent tables first.
-        for idx, table in enumerate([Claim, TriggerEvent, PremiumRecord, Policy, BayesianPosterior, H3RiskProfile, BCRRecord, Worker]):
+        tables_to_clear = [Payout, Claim, TriggerEvent, PremiumRecord, Policy, BayesianPosterior, H3RiskProfile, BCRRecord, Worker]
+        for idx, table in enumerate(tables_to_clear):
             await db.execute(delete(table))
-            progress(idx + 1, 8, "clearing tables")
+            progress(idx + 1, len(tables_to_clear), "clearing tables")
         await db.commit()
 
         platforms = ["zepto", "blinkit", "swiggy", "zomato"]
@@ -116,10 +127,12 @@ async def main() -> None:
         for i in range(50):
             h3_hex, zone = zone_items[i % len(zone_items)]
             days = random.randint(4, 26)
+            platform_value = random.choice(platforms)
+            shift_start_hour, shift_end_hour = shift_window_for_platform(platform_value)
             worker = Worker(
                 phone=f"+91{6000000000 + i * 53197 + 12345}",
                 name=NAMES[i],
-                platform=Platform(random.choice(platforms)),
+                platform=Platform(platform_value),
                 platform_id=f"PLT{2026}{i+1:04d}",
                 city=zone["city"],
                 h3_hex=h3_hex,
@@ -128,6 +141,8 @@ async def main() -> None:
                 active_days_30=days,
                 total_deliveries=random.randint(120, 1100),
                 trust_score_floor=0.40,
+                shift_start_hour=shift_start_hour,
+                shift_end_hour=shift_end_hour,
                 is_active=True,
             )
             db.add(worker)
@@ -174,25 +189,28 @@ async def main() -> None:
             await db.refresh(p)
 
         triggers: list[TriggerEvent] = []
-        perils = ["aqi", "rain", "heat", "flood", "storm", "curfew", "store"]
+        perils = ["aqi", "rain", "curfew"]
         peril_range = {
-            "aqi": (280, 460),
-            "rain": (40, 160),
-            "heat": (40, 49),
-            "flood": (1, 3),
-            "storm": (40, 100),
-            "curfew": (0.3, 1.0),
-            "store": (0.3, 0.95),
+            "aqi": (260, 720),
+            "rain": (4, 72),
+            "curfew": (6, 95),
         }
         for i in range(120):
             h3_hex, zone = random.choice(zone_items)
             peril = random.choice(perils)
             lo, hi = peril_range[peril]
             reading = round(random.uniform(lo, hi), 2)
-            if peril in {"aqi", "rain", "heat", "storm"}:
-                level = 3 if reading >= {"aqi": 450, "rain": 150, "heat": 48, "storm": 90}[peril] else 2 if reading >= {"aqi": 400, "rain": 100, "heat": 45, "storm": 70}[peril] else 1
-            else:
-                level = 2
+            level = (
+                3
+                if reading > {"aqi": 650, "rain": 40, "curfew": 70}[peril]
+                else 2
+                if reading > {"aqi": 550, "rain": 25, "curfew": 55}[peril]
+                else 1
+                if reading > {"aqi": 450, "rain": 15, "curfew": 40}[peril]
+                else 0
+            )
+            if level == 0:
+                continue
             payout_pct = 1.0 if level == 3 else 0.6 if level == 2 else 0.3
             trigger = TriggerEvent(
                 peril=PerilType(peril),
@@ -327,8 +345,9 @@ async def main() -> None:
 
     artifacts = train_models("./ml/models")
     print(f"Model artifacts: {artifacts}")
-    print("✓ Soteria seed data loaded. 50 workers, 200 claims, 10 H3 zones.")
+    print("[OK] Soteria seed data loaded. 50 workers, 200 claims, 10 H3 zones.")
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+

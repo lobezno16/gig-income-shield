@@ -8,13 +8,14 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import case, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from constants import H3_ZONES
+from constants import H3_ZONES, SUPPORTED_PARAMETRIC_PERILS
 from database import get_db
 from dependencies import get_current_worker
 from models import BCRRecord, BayesianPosterior, Claim, ClaimStatus, H3RiskProfile, Policy, PolicyStatus, TriggerEvent, Worker
 from response import error_response, request_id_from_request, success_response
 
 router = APIRouter(prefix="/api", tags=["zones", "liquidity"])
+SUPPORTED_PERILS = set(SUPPORTED_PARAMETRIC_PERILS)
 
 
 def _enum_value(value):
@@ -31,8 +32,9 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
         )
     ).all()
     posterior_map = {
-        (row[0], row[1]): float(row[2])
+        (row[0], str(_enum_value(row[1]))): float(row[2])
         for row in posterior_rows
+        if str(_enum_value(row[1])) in SUPPORTED_PERILS
     }
 
     workers_by_hex_rows = (
@@ -76,8 +78,9 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
         await db.execute(select(latest_trigger_ranked).where(latest_trigger_ranked.c.rn == 1))
     ).mappings().all()
     latest_trigger_map = {
-        (row["h3_hex"], _enum_value(row["peril"])): row
+        (row["h3_hex"], str(_enum_value(row["peril"]))): row
         for row in latest_trigger_rows
+        if str(_enum_value(row["peril"])) in SUPPORTED_PERILS
     }
 
     if profiles:
@@ -116,6 +119,7 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
                 ),
             }
             for p in profiles
+            if str(p.peril) in SUPPORTED_PERILS
         ]
     else:
         data = [

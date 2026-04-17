@@ -117,6 +117,11 @@ export async function getClaims(workerId: string) {
   return data;
 }
 
+export async function simulateTriggerEvent(payload: Record<string, unknown>) {
+  const { data } = await api.post("/api/triggers/simulate", payload);
+  return data;
+}
+
 export async function getDashboard(workerId: string) {
   const { data } = await api.get(`/api/dashboard/${workerId}`);
   return data;
@@ -137,6 +142,11 @@ export async function getLossRatio() {
   return data;
 }
 
+export async function getIntegrationHealth() {
+  const { data } = await api.get("/api/analytics/integration-health");
+  return data;
+}
+
 export async function runStressTest(scenario: string) {
   const { data } = await api.post("/api/analytics/stress-test", { scenario });
   return data;
@@ -144,6 +154,11 @@ export async function runStressTest(scenario: string) {
 
 export async function getHeatmap() {
   const { data } = await api.get("/api/zones/heatmap");
+  return data;
+}
+
+export async function getLiquidityForecast() {
+  const { data } = await api.get("/api/liquidity/forecast");
   return data;
 }
 

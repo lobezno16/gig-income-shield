@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-import h3
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -11,17 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from events import event_bus
-from models import TriggerEvent, Worker
+from models import TriggerEvent
 from response import error_response, request_id_from_request, success_response
-from services.claims_orchestrator import orchestrate_claim_for_worker
 from services.sentinelle.data_sources import classify_trigger_level
+from services.sentinelle.trigger_cron import process_trigger_event_claims
 from services.sentinelle.trigger_processor import create_trigger_event
 
 router = APIRouter(prefix="/api", tags=["triggers"])
 
 
 class TriggerWebhookPayload(BaseModel):
-    peril: str
+    peril: Literal["rain", "curfew", "aqi"]
     source: str
     reading_value: float
     city: str
@@ -30,58 +30,23 @@ class TriggerWebhookPayload(BaseModel):
 
 
 class TriggerSimulationPayload(BaseModel):
-    peril: str = Field(default="aqi")
-    reading_value: float = Field(default=380)
+    peril: Literal["rain", "curfew", "aqi"] = Field(default="aqi")
+    reading_value: float = Field(default=480)
     city: str = Field(default="delhi")
     h3_hex: str = Field(default="872a1072bffffff")
     source: str = Field(default="simulation")
 
 
 async def auto_process_trigger_claims(db: AsyncSession, event: TriggerEvent, max_workers: int = 40) -> dict:
-    try:
-        center_lat, center_lng = h3.cell_to_latlng(event.h3_hex)
-    except Exception:
-        center_lat, center_lng = (28.6139, 77.2090)
-
-    workers = (
-        await db.execute(
-            select(Worker).where(Worker.h3_hex == event.h3_hex, Worker.is_active.is_(True)).order_by(Worker.created_at.desc()).limit(max_workers)
-        )
-    ).scalars().all()
-
-    claims_created = 0
-    paid = 0
-    blocked = 0
-    total_payout = 0.0
-    for worker in workers:
-        claim, settlement = await orchestrate_claim_for_worker(
-            db,
-            worker=worker,
-            trigger=event,
-            gps_lat=center_lat,
-            gps_lng=center_lng,
-            platform_active_at_trigger=True,
-            timestamp=datetime.utcnow(),
-            typical_shift_start=8,
-            typical_shift_end=23,
-        )
-        if claim is None:
-            continue
-        claims_created += 1
-        total_payout += float(claim.payout_amount)
-        if claim.status.value == "paid":
-            paid += 1
-        if claim.status.value == "blocked":
-            blocked += 1
-
-    event.total_payout_inr = total_payout
-    await db.commit()
-    await db.refresh(event)
+    summary = await process_trigger_event_claims(db, event, max_policies=max_workers * 4)
     return {
-        "claims_created": claims_created,
-        "paid": paid,
-        "blocked": blocked,
-        "total_payout_inr": round(total_payout, 2),
+        "claims_created": summary.claims_created,
+        "paid": 0,
+        "blocked": summary.claims_blocked,
+        "flagged": summary.claims_flagged,
+        "approved": summary.claims_approved,
+        "total_payout_inr": round(summary.total_payout_inr, 2),
+        "eligible_workers": summary.eligible_workers,
     }
 
 
@@ -92,16 +57,19 @@ async def disruption_webhook(payload: TriggerWebhookPayload, request: Request, d
     if not level:
         return error_response("NO_TRIGGER", "Reading did not cross threshold.", status_code=200, request_id=request_id)
     trigger_level, payout_pct = level
-    event = await create_trigger_event(
-        db,
-        peril=payload.peril,
-        source=payload.source,
-        city=payload.city,
-        h3_hex=payload.h3_hex,
-        reading_value=payload.reading_value,
-        trigger_level=trigger_level,
-        payout_pct=payout_pct,
-    )
+    try:
+        event = await create_trigger_event(
+            db,
+            peril=payload.peril,
+            source=payload.source,
+            city=payload.city,
+            h3_hex=payload.h3_hex,
+            reading_value=payload.reading_value,
+            trigger_level=trigger_level,
+            payout_pct=payout_pct,
+        )
+    except ValueError as exc:
+        return error_response("VALIDATION_ERROR", str(exc), status_code=400, request_id=request_id)
     claim_summary = await auto_process_trigger_claims(db, event)
     return success_response(
         {
@@ -155,16 +123,19 @@ async def simulate_trigger(payload: TriggerSimulationPayload, request: Request, 
     if not level:
         return error_response("NO_TRIGGER", "Simulation reading below threshold.", status_code=400, request_id=request_id)
     trigger_level, payout_pct = level
-    event = await create_trigger_event(
-        db,
-        peril=payload.peril,
-        source=payload.source,
-        city=payload.city,
-        h3_hex=payload.h3_hex,
-        reading_value=payload.reading_value,
-        trigger_level=trigger_level,
-        payout_pct=payout_pct,
-    )
+    try:
+        event = await create_trigger_event(
+            db,
+            peril=payload.peril,
+            source=payload.source,
+            city=payload.city,
+            h3_hex=payload.h3_hex,
+            reading_value=payload.reading_value,
+            trigger_level=trigger_level,
+            payout_pct=payout_pct,
+        )
+    except ValueError as exc:
+        return error_response("VALIDATION_ERROR", str(exc), status_code=400, request_id=request_id)
     claim_summary = await auto_process_trigger_claims(db, event)
     await event_bus.publish(
         "claims",

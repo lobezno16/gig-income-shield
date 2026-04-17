@@ -39,4 +39,4 @@ class Claim(Base):
     worker = relationship("Worker", back_populates="claims")
     policy = relationship("Policy", back_populates="claims")
     trigger = relationship("TriggerEvent", back_populates="claims")
-
+    payout = relationship("Payout", back_populates="claim", uselist=False)

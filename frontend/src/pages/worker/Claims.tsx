@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { CheckCircle2, CloudRain, IndianRupee, Shield, Thermometer, Wind } from "lucide-react";
+import { CheckCircle2, CloudRain, IndianRupee, Shield, Wind } from "lucide-react";
 
 import { Badge } from "../../design-system/components/Badge";
 import { Button } from "../../design-system/components/Button";
@@ -29,6 +29,9 @@ interface ClaimItem {
   payout_amount: number;
   created_at: string;
   settled_at: string | null;
+  upi_ref?: string | null;
+  bank_ref?: string | null;
+  settlement_channel?: string | null;
   timeline: ClaimTimelineStep[];
 }
 
@@ -82,6 +85,9 @@ const DEMO_CLAIMS: ClaimItem[] = [
     payout_amount: 420,
     created_at: "2026-04-01T18:00:00+05:30",
     settled_at: "2026-04-01T18:03:00+05:30",
+    upi_ref: "pout_v7uk7z20yxyr2d",
+    bank_ref: "HDFC59919202",
+    settlement_channel: "Razorpay UPI Test Mode",
     timeline: [
       {
         id: "trigger_detected",
@@ -132,23 +138,54 @@ const DEMO_CLAIMS: ClaimItem[] = [
 const perilLabelMap: Record<string, string> = {
   rain: "Heavy Rain",
   aqi: "Air Pollution",
-  heat: "Extreme Heat",
-  flood: "Flooding",
-  storm: "Storm",
   curfew: "Curfew",
-  store: "Store Closure",
 };
 
-function inferPeril(claim: ClaimItem): "rain" | "aqi" | "heat" {
+function toISOWeekKey(value: string | Date): string | null {
+  const date = typeof value === "string" ? new Date(value) : new Date(value.getTime());
+  if (Number.isNaN(date.getTime())) return null;
+
+  const normalized = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = normalized.getUTCDay() || 7;
+  normalized.setUTCDate(normalized.getUTCDate() + 4 - day);
+
+  const yearStart = new Date(Date.UTC(normalized.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((normalized.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${normalized.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+function maskUpiId(upiId: string | undefined): string {
+  if (!upiId) return "ravi***@upi";
+  const [localPart, domainPart] = upiId.split("@");
+  if (!localPart) return "ravi***@upi";
+  const visible = localPart.slice(0, Math.min(4, localPart.length));
+  return `${visible}***@${domainPart || "upi"}`;
+}
+
+function payoutIdFromRef(ref: string | null | undefined): string {
+  if (!ref) return "pout_unavailable";
+  return ref.startsWith("pout_") ? ref : `pout_${ref}`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function inferPeril(claim: ClaimItem): "rain" | "aqi" | "curfew" {
   const timelineText = claim.timeline.map((step) => `${step.label} ${step.description}`.toLowerCase()).join(" ");
   if (timelineText.includes("aqi") || timelineText.includes("air")) return "aqi";
-  if (timelineText.includes("heat") || timelineText.includes("temperature")) return "heat";
+  if (timelineText.includes("traffic") || timelineText.includes("roadblock") || timelineText.includes("curfew")) return "curfew";
   return "rain";
 }
 
-function PerilIcon({ peril }: { peril: "rain" | "aqi" | "heat" }) {
+function PerilIcon({ peril }: { peril: "rain" | "aqi" | "curfew" }) {
   if (peril === "aqi") return <Wind size={16} />;
-  if (peril === "heat") return <Thermometer size={16} />;
+  if (peril === "curfew") return <Shield size={16} />;
   return <CloudRain size={16} />;
 }
 
@@ -205,24 +242,98 @@ export function WorkerClaimsPage() {
 
   const totals = useMemo(() => {
     const claimsFiled = claims.length;
+    const paidClaims = claims.filter((claim) => claim.status === "paid");
     const totalPaidOut = claims
       .filter((claim) => claim.status === "paid")
+      .reduce((sum, claim) => sum + Number(claim.payout_amount || 0), 0);
+    const currentWeek = toISOWeekKey(new Date());
+    const paidThisWeek = paidClaims
+      .filter((claim) => claim.settled_at && currentWeek && toISOWeekKey(claim.settled_at) === currentWeek)
       .reduce((sum, claim) => sum + Number(claim.payout_amount || 0), 0);
     const protectedDays = new Set(claims.map((claim) => claim.created_at.slice(0, 10))).size;
     return {
       claimsFiled,
+      paidClaims: paidClaims.length,
       totalPaidOut,
+      paidThisWeek,
       protectedDays,
     };
   }, [claims]);
 
   const coveredPerilsText = useMemo(() => {
-    const perils = policyData?.data?.coverage?.covered_perils ?? ["rain", "heat", "aqi"];
+    const perils = policyData?.data?.coverage?.covered_perils ?? ["rain", "curfew", "aqi"];
     return perils.map((peril) => perilLabelMap[peril] ?? peril.toUpperCase()).join(", ");
   }, [policyData?.data?.coverage?.covered_perils]);
 
   const showClaimsLoading = !demoMode && claimsQuery.isLoading;
   const hasClaims = claims.length > 0;
+  const workerUpiMasked = maskUpiId(currentWorker?.upi_id);
+
+  const downloadReceipt = (claim: ClaimItem) => {
+    if (claim.status !== "paid") return;
+    const payoutId = payoutIdFromRef(claim.upi_ref);
+    const bankRef = claim.bank_ref || "Pending";
+    const settlementChannel = claim.settlement_channel || "Razorpay UPI Test Mode";
+    const timestamp = formatDateTime(claim.settled_at ?? claim.created_at);
+    const amount = formatINR(claim.payout_amount);
+    const safeClaimNumber = escapeHtml(claim.claim_number);
+    const safePayoutId = escapeHtml(payoutId);
+    const safeBankRef = escapeHtml(bankRef);
+    const safeAmount = escapeHtml(amount);
+    const safeUpi = escapeHtml(workerUpiMasked);
+    const safeTimestamp = escapeHtml(timestamp);
+    const safeChannel = escapeHtml(settlementChannel);
+    const safeName = escapeHtml(currentWorker?.name || "Worker");
+
+    const receiptHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Soteria Payment Receipt - ${safeClaimNumber}</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; color: #111111; }
+      .receipt { border: 1px solid #dcdcdc; border-radius: 12px; padding: 20px; max-width: 560px; margin: 0 auto; }
+      .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+      .brand { font-size: 14px; font-weight: 700; color: #3395ff; }
+      h1 { font-size: 20px; margin: 0; }
+      .claim { margin: 4px 0 0 0; color: #555555; }
+      .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin-top: 12px; }
+      .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #666666; margin: 0; }
+      .value { font-size: 15px; font-weight: 700; margin: 2px 0 0 0; }
+      .foot { margin-top: 16px; font-size: 12px; color: #666666; }
+    </style>
+  </head>
+  <body>
+    <div class="receipt">
+      <div class="head">
+        <div>
+          <h1>Payment Receipt</h1>
+          <p class="claim">${safeClaimNumber} | ${safeName}</p>
+        </div>
+        <p class="brand">Powered by Razorpay</p>
+      </div>
+      <div class="grid">
+        <div><p class="label">Settlement Channel</p><p class="value">${safeChannel}</p></div>
+        <div><p class="label">Amount</p><p class="value">${safeAmount}</p></div>
+        <div><p class="label">Payout ID</p><p class="value">${safePayoutId}</p></div>
+        <div><p class="label">UTR Number</p><p class="value">${safeBankRef}</p></div>
+        <div><p class="label">UPI ID</p><p class="value">${safeUpi}</p></div>
+        <div><p class="label">Timestamp</p><p class="value">${safeTimestamp}</p></div>
+      </div>
+      <p class="foot">This is a simulated Razorpay UPI receipt generated by Soteria.</p>
+    </div>
+    <script>
+      window.addEventListener('load', function () { window.print(); });
+    </script>
+  </body>
+</html>`;
+
+    const receiptWindow = window.open("", "_blank", "noopener,noreferrer,width=820,height=920");
+    if (!receiptWindow) return;
+    receiptWindow.document.open();
+    receiptWindow.document.write(receiptHtml);
+    receiptWindow.document.close();
+  };
 
   if (isLoading) return null;
   if (!isAuthenticated || !currentWorker) return null;
@@ -230,6 +341,17 @@ export function WorkerClaimsPage() {
   return (
     <WorkerShell activeTab="claims" pageTitle="Claims" maxWidth={900}>
       <section className="claims-page-stack">
+        <div className="claims-protected-banner" role="status" aria-live="polite">
+          {showClaimsLoading ? (
+            <div className="skeleton claims-protected-banner__loading" />
+          ) : (
+            <p className="claims-protected-banner__text">
+              {`Total Earnings Protected: ${formatINR(totals.totalPaidOut)} | ${totals.paidClaims} claims paid | This week: ${formatINR(
+                totals.paidThisWeek
+              )}`}
+            </p>
+          )}
+        </div>
         <Card>
           <div className="claims-section-head">
             <h1 style={{ margin: 0 }}>Recent Claims</h1>
@@ -247,10 +369,23 @@ export function WorkerClaimsPage() {
               {claims.map((claim) => {
                 const peril = inferPeril(claim);
                 const isExpanded = expandedClaimId === claim.id;
+                const isPaid = claim.status === "paid";
+                const payoutId = payoutIdFromRef(claim.upi_ref);
+                const bankRef = claim.bank_ref || "Pending";
+                const settlementChannel = claim.settlement_channel || "Razorpay UPI Test Mode";
+                const receiptTimestamp = formatDateTime(claim.settled_at ?? claim.created_at);
                 return (
-                  <article key={claim.id} className="claims-item-card">
+                  <article key={claim.id} className={`claims-item-card ${isPaid ? "claims-item-card--paid" : ""}`}>
                     <div className="claims-item-top">
-                      <p className="mono claims-claim-number">{claim.claim_number}</p>
+                      <div className="claims-claim-head">
+                        {isPaid ? (
+                          <span className="claims-paid-shield" aria-hidden="true">
+                            <Shield size={16} />
+                            <IndianRupee size={11} />
+                          </span>
+                        ) : null}
+                        <p className="mono claims-claim-number">{claim.claim_number}</p>
+                      </div>
                       <Badge tone={statusTone(claim.status)}>{claim.status.toUpperCase()}</Badge>
                     </div>
 
@@ -290,6 +425,46 @@ export function WorkerClaimsPage() {
                         ))}
                       </div>
                     ) : null}
+
+                    {isPaid ? (
+                      <details className="claims-receipt">
+                        <summary className="claims-receipt__summary">Payment Receipt</summary>
+                        <div className="claims-receipt__body">
+                          <div className="claims-receipt__grid">
+                            <p>
+                              <span>Settlement Channel</span>
+                              <strong>{settlementChannel}</strong>
+                            </p>
+                            <p>
+                              <span>Payout ID</span>
+                              <strong className="mono">{payoutId}</strong>
+                            </p>
+                            <p>
+                              <span>UTR Number</span>
+                              <strong className="mono">{bankRef}</strong>
+                            </p>
+                            <p>
+                              <span>Amount</span>
+                              <strong>{formatINR(claim.payout_amount)}</strong>
+                            </p>
+                            <p>
+                              <span>UPI ID</span>
+                              <strong>{workerUpiMasked}</strong>
+                            </p>
+                            <p>
+                              <span>Timestamp</span>
+                              <strong>{receiptTimestamp}</strong>
+                            </p>
+                          </div>
+                          <div className="claims-receipt__footer">
+                            <p className="claims-receipt__brand">Powered by Razorpay</p>
+                            <Button variant="secondary" onClick={() => downloadReceipt(claim)}>
+                              Download Receipt
+                            </Button>
+                          </div>
+                        </div>
+                      </details>
+                    ) : null}
                   </article>
                 );
               })}
@@ -307,7 +482,7 @@ export function WorkerClaimsPage() {
               </svg>
               <h2>You&apos;re protected</h2>
               <p>
-                When heavy rain, extreme heat, or air pollution hits your zone, your claim is filed automatically. No action needed from you.
+                When heavy rain, traffic disruption, or hazardous air pollution hits your zone, your claim is filed automatically. No action needed from you.
               </p>
               <small>
                 Coverage active - Zone: {zoneAreaLabel(currentWorker.h3_hex)} - {coveredPerilsText}

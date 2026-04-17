@@ -1,7 +1,7 @@
 export type Platform = "zepto" | "zomato" | "swiggy" | "blinkit";
 export type Tier = "gold" | "silver" | "bronze" | "restricted";
 export type Plan = "lite" | "standard" | "pro";
-export type Peril = "aqi" | "rain" | "heat" | "flood" | "storm" | "curfew" | "store";
+export type Peril = "aqi" | "rain" | "curfew";
 export type PolicyStatus = "active" | "lapsed" | "suspended";
 export type ClaimStatus = "processing" | "approved" | "paid" | "flagged" | "blocked";
 export type UserRole = "worker" | "admin" | "superadmin";

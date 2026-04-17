@@ -29,8 +29,18 @@ class Settings(BaseSettings):
 
     owm_api_key: str = Field(default="", alias="OWM_API_KEY")
     waqi_api_key: str = Field(default="", alias="WAQI_API_KEY")
+    cpcb_api_key: str = Field(default="", alias="CPCB_API_KEY")
+    cpcb_base_url: str = Field(default="https://api.cpcb.gov.in", alias="CPCB_BASE_URL")
+    tomtom_api_key: str = Field(default="", alias="TOMTOM_API_KEY")
+    tomtom_base_url: str = Field(default="https://api.tomtom.com/traffic/services/4", alias="TOMTOM_BASE_URL")
+    payment_provider: str = Field(default="razorpay_test", alias="PAYMENT_PROVIDER")
+    stripe_secret_key: str = Field(default="", alias="STRIPE_SECRET_KEY")
     razorpay_key_id: str = Field(default="", alias="RAZORPAY_KEY_ID")
     razorpay_key_secret: str = Field(default="", alias="RAZORPAY_KEY_SECRET")
+    trigger_poll_interval_minutes: int = Field(default=10, alias="TRIGGER_POLL_INTERVAL_MINUTES")
+    trigger_dedupe_minutes: int = Field(default=60, alias="TRIGGER_DEDUPE_MINUTES")
+    default_worker_shift_start: int = Field(default=8, alias="DEFAULT_WORKER_SHIFT_START")
+    default_worker_shift_end: int = Field(default=23, alias="DEFAULT_WORKER_SHIFT_END")
 
     ml_model_dir: str = Field(default="./ml/models", alias="ML_MODEL_DIR")
     ml_retrain_hour: int = Field(default=2, alias="ML_RETRAIN_HOUR")
@@ -98,7 +108,19 @@ class Settings(BaseSettings):
 
     @property
     def has_real_weather_data(self) -> bool:
-        return bool(self.owm_api_key and self.waqi_api_key)
+        return bool(self.owm_api_key)
+
+    @property
+    def has_real_traffic_data(self) -> bool:
+        return bool(self.tomtom_api_key)
+
+    @property
+    def has_real_aqi_data(self) -> bool:
+        return bool(self.cpcb_api_key or self.waqi_api_key)
+
+    @property
+    def has_real_multi_oracle_data(self) -> bool:
+        return bool(self.has_real_weather_data and self.has_real_traffic_data and self.has_real_aqi_data)
 
 
 @lru_cache

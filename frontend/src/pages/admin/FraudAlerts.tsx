@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getFraudAlerts, overrideAdminClaim } from "../../api/client";
@@ -22,6 +22,8 @@ type FraudAlert = {
   created_at?: string;
 };
 
+type SpoofingRisk = "GPS_SPOOF" | "FAKE_WEATHER" | "RING_ATTACK" | "CLEAN";
+
 interface PendingAction {
   claimNumber: string;
   claimId: string;
@@ -30,6 +32,44 @@ interface PendingAction {
 
 function scoreTone(score: number): "warning" | "danger" {
   return score >= 0.8 ? "danger" : "warning";
+}
+
+function containsAnyFlag(flags: string[], patterns: string[]): boolean {
+  const normalized = flags.map((flag) => String(flag).toLowerCase());
+  return normalized.some((flag) => patterns.some((pattern) => flag.includes(pattern)));
+}
+
+function deriveSpoofingRisk(flags: string[]): SpoofingRisk {
+  if (containsAnyFlag(flags, ["ring", "cluster", "collusion", "dbscan"])) return "RING_ATTACK";
+  if (containsAnyFlag(flags, ["weather", "aqi", "rain", "curfew", "traffic", "roadblock"])) return "FAKE_WEATHER";
+  if (containsAnyFlag(flags, ["gps", "location", "spoof", "wifi", "motion", "battery", "cell_tower", "zone"])) return "GPS_SPOOF";
+  return "CLEAN";
+}
+
+function spoofingRiskTone(risk: SpoofingRisk): "danger" | "warning" | "success" {
+  if (risk === "GPS_SPOOF" || risk === "RING_ATTACK") return "danger";
+  if (risk === "FAKE_WEATHER") return "warning";
+  return "success";
+}
+
+function trustSignalBreakdown(flags: string[], risk: SpoofingRisk): { key: string; label: string; suspicious: boolean }[] {
+  const gpsSuspicious = containsAnyFlag(flags, ["gps", "location", "zone", "spoof"]) || risk === "GPS_SPOOF";
+  const motionSuspicious = containsAnyFlag(flags, ["motion", "shift", "active"]) || risk === "GPS_SPOOF";
+  const wifiSuspicious = containsAnyFlag(flags, ["wifi", "ssid"]) || risk === "GPS_SPOOF";
+  const batterySuspicious = containsAnyFlag(flags, ["battery", "charging"]) || risk === "GPS_SPOOF";
+  const cellTowerSuspicious = containsAnyFlag(flags, ["cell", "tower", "zone"]) || risk === "GPS_SPOOF";
+  const networkSuspicious = containsAnyFlag(flags, ["network", "latency", "offline"]) || risk === "FAKE_WEATHER";
+  const platformSuspicious = containsAnyFlag(flags, ["platform", "duplicate", "ring", "cluster"]) || risk === "RING_ATTACK";
+
+  return [
+    { key: "gps_accuracy", label: "GPS Accuracy", suspicious: gpsSuspicious },
+    { key: "motion", label: "Motion", suspicious: motionSuspicious },
+    { key: "wifi", label: "Wi-Fi", suspicious: wifiSuspicious },
+    { key: "battery", label: "Battery", suspicious: batterySuspicious },
+    { key: "cell_tower", label: "Cell Tower", suspicious: cellTowerSuspicious },
+    { key: "network", label: "Network", suspicious: networkSuspicious },
+    { key: "platform_status", label: "Platform", suspicious: platformSuspicious },
+  ];
 }
 
 export function FraudAlertsPage() {
@@ -59,6 +99,22 @@ export function FraudAlertsPage() {
   });
 
   const alerts = (query.data?.data?.alerts ?? []) as FraudAlert[];
+  const mostRecentFlagged = useMemo(() => {
+    if (!alerts.length) return null;
+    const sorted = [...alerts].sort((left, right) => {
+      const leftTime = left.created_at ? new Date(left.created_at).getTime() : 0;
+      const rightTime = right.created_at ? new Date(right.created_at).getTime() : 0;
+      return rightTime - leftTime;
+    });
+    return sorted.find((item) => item.status === "flagged") ?? sorted[0];
+  }, [alerts]);
+  const mostRecentFlags = mostRecentFlagged?.flags ?? [];
+  const mostRecentSpoofingRisk = deriveSpoofingRisk(mostRecentFlags);
+  const signalBreakdown = useMemo(
+    () => trustSignalBreakdown(mostRecentFlags, mostRecentSpoofingRisk),
+    [mostRecentFlags, mostRecentSpoofingRisk]
+  );
+  const suspiciousSignalCount = signalBreakdown.filter((item) => item.suspicious).length;
 
   return (
     <AdminLayout>
@@ -78,61 +134,140 @@ export function FraudAlertsPage() {
             <p>No data yet.</p>
           </div>
         ) : null}
-        <div className="admin-fraud-grid">
-          {alerts.map((alert) => (
-            <div key={alert.claim_id} className="admin-fraud-item">
-              <div className="admin-fraud-item__head">
-                <p className="mono" style={{ margin: 0 }}>
-                  {alert.claim_number}
+        {!query.isLoading && !query.isError ? (
+          <div className="admin-spoof-panel">
+            <div className="admin-spoof-panel__head">
+              <div>
+                <h2 style={{ margin: 0 }}>GPS Spoofing Detection</h2>
+                <p className="admin-muted-text" style={{ marginTop: 6 }}>
+                  {mostRecentFlagged
+                    ? `Most recent flagged claim: ${mostRecentFlagged.claim_number}`
+                    : "No flagged claim yet. Showing baseline spoofing detection references."}
                 </p>
-                <Badge tone={scoreTone(alert.fraud_score)}>Score {Number(alert.fraud_score).toFixed(2)}</Badge>
               </div>
-              <p className="admin-fraud-item__meta">
-                Trigger: {alert.trigger.toUpperCase()} | Cluster size: {alert.cluster_size} | Window: {alert.temporal_window}
-              </p>
-              <div className="admin-fraud-item__flags">
-                {(alert.flags ?? []).map((flag) => (
-                  <Badge key={flag} tone="warning">
-                    {flag}
-                  </Badge>
-                ))}
-                {(alert.hexes ?? []).map((hex) => (
-                  <Badge key={hex} tone="muted">
-                    {hex}
-                  </Badge>
+              <Badge tone={spoofingRiskTone(mostRecentSpoofingRisk)}>Spoofing Risk: {mostRecentSpoofingRisk}</Badge>
+            </div>
+
+            <div className="admin-spoof-split">
+              <article className="admin-spoof-signal-card admin-spoof-signal-card--risk">
+                <p className="admin-spoof-signal-card__title">Suspicious Signals</p>
+                <ul className="admin-spoof-signal-list">
+                  <li>GPS: 28.5900000 deg N (suspiciously precise)</li>
+                  <li>Motion: Stationary (accelerometer flat)</li>
+                  <li>Wi-Fi: Home SSID detected</li>
+                  <li>Battery: Charging (idle at home)</li>
+                </ul>
+              </article>
+
+              <article className="admin-spoof-signal-card admin-spoof-signal-card--legit">
+                <p className="admin-spoof-signal-card__title">Genuine Signals (Reference)</p>
+                <ul className="admin-spoof-signal-list">
+                  <li>GPS: 28.5921 deg N +/-8m (rain-degraded, normal)</li>
+                  <li>Motion: Bike vibration detected</li>
+                  <li>Wi-Fi: No known SSIDs (outdoor)</li>
+                  <li>Battery: Draining (GPS + screen active)</li>
+                </ul>
+              </article>
+            </div>
+
+            <div className="admin-spoof-breakdown">
+              <div className="admin-spoof-breakdown__head">
+                <p className="admin-spoof-breakdown__title">Trust Score Breakdown</p>
+                <p className="admin-spoof-breakdown__meta">
+                  Legitimate signals: {signalBreakdown.length - suspiciousSignalCount} / {signalBreakdown.length} | Spoofing indicators:{" "}
+                  {suspiciousSignalCount} / {signalBreakdown.length}
+                </p>
+              </div>
+              <div className="admin-spoof-breakdown__bar" role="img" aria-label="Trust score breakdown across seven signals">
+                {signalBreakdown.map((signal) => (
+                  <span
+                    key={signal.key}
+                    className={`admin-spoof-breakdown__segment ${
+                      signal.suspicious ? "admin-spoof-breakdown__segment--risk" : "admin-spoof-breakdown__segment--legit"
+                    }`}
+                    style={{ width: `${100 / signalBreakdown.length}%` }}
+                    title={`${signal.label}: ${signal.suspicious ? "Spoofing indicator" : "Legitimate"}`}
+                  />
                 ))}
               </div>
-              <div className="admin-fraud-item__actions">
-                <Button variant="secondary" onClick={() => setSelected(alert)}>
-                  View Details
-                </Button>
-                <Button
-                  variant="secondary"
-                  onClick={() =>
-                    setPendingAction({
-                      claimId: alert.claim_id,
-                      claimNumber: alert.claim_number,
-                      releasePct: 0.8,
-                    })
-                  }
-                >
-                  Release 80%
-                </Button>
-                <Button
-                  variant="danger"
-                  onClick={() =>
-                    setPendingAction({
-                      claimId: alert.claim_id,
-                      claimNumber: alert.claim_number,
-                      releasePct: 0.0,
-                    })
-                  }
-                >
-                  Block Claim
-                </Button>
+              <div className="admin-spoof-breakdown__legend">
+                {signalBreakdown.map((signal) => (
+                  <div key={signal.key} className="admin-spoof-breakdown__legend-item">
+                    <span
+                      className={`admin-spoof-breakdown__legend-dot ${
+                        signal.suspicious ? "admin-spoof-breakdown__legend-dot--risk" : "admin-spoof-breakdown__legend-dot--legit"
+                      }`}
+                      aria-hidden="true"
+                    />
+                    <span>{signal.label}</span>
+                  </div>
+                ))}
               </div>
             </div>
-          ))}
+          </div>
+        ) : null}
+        <div className="admin-fraud-grid">
+          {alerts.map((alert) => {
+            const spoofingRisk = deriveSpoofingRisk(alert.flags ?? []);
+            return (
+              <div key={alert.claim_id} className="admin-fraud-item">
+                <div className="admin-fraud-item__head">
+                  <p className="mono" style={{ margin: 0 }}>
+                    {alert.claim_number}
+                  </p>
+                  <div className="admin-fraud-item__head-badges">
+                    <Badge tone={scoreTone(alert.fraud_score)}>Score {Number(alert.fraud_score).toFixed(2)}</Badge>
+                    <span className="admin-fraud-item__risk-label">Spoofing Risk</span>
+                    <Badge tone={spoofingRiskTone(spoofingRisk)}>{spoofingRisk}</Badge>
+                  </div>
+                </div>
+                <p className="admin-fraud-item__meta">
+                  Trigger: {alert.trigger.toUpperCase()} | Cluster size: {alert.cluster_size} | Window: {alert.temporal_window}
+                </p>
+                <div className="admin-fraud-item__flags">
+                  {(alert.flags ?? []).map((flag) => (
+                    <Badge key={flag} tone="warning">
+                      {flag}
+                    </Badge>
+                  ))}
+                  {(alert.hexes ?? []).map((hex) => (
+                    <Badge key={hex} tone="muted">
+                      {hex}
+                    </Badge>
+                  ))}
+                </div>
+                <div className="admin-fraud-item__actions">
+                  <Button variant="secondary" onClick={() => setSelected(alert)}>
+                    View Details
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      setPendingAction({
+                        claimId: alert.claim_id,
+                        claimNumber: alert.claim_number,
+                        releasePct: 0.8,
+                      })
+                    }
+                  >
+                    Release 80%
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={() =>
+                      setPendingAction({
+                        claimId: alert.claim_id,
+                        claimNumber: alert.claim_number,
+                        releasePct: 0.0,
+                      })
+                    }
+                  >
+                    Block Claim
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </Card>
 
@@ -149,6 +284,11 @@ export function FraudAlertsPage() {
             <p className="admin-muted-text" style={{ marginTop: 4 }}>
               Trigger: {selected.trigger.toUpperCase()} | Cluster size: {selected.cluster_size}
             </p>
+            <div style={{ marginTop: 8 }}>
+              <Badge tone={spoofingRiskTone(deriveSpoofingRisk(selected.flags ?? []))}>
+                Spoofing Risk: {deriveSpoofingRisk(selected.flags ?? [])}
+              </Badge>
+            </div>
             <div className="admin-fraud-item__flags" style={{ marginTop: 8 }}>
               {selected.flags.map((flag) => (
                 <Badge key={flag} tone="warning">

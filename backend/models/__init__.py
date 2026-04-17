@@ -1,4 +1,5 @@
 from models.claim import Claim, ClaimStatus
+from models.payout import Payout, PayoutStatus
 from models.policy import PlanType, Policy, PolicyStatus, PoolConfig
 from models.premium import BCRRecord, BayesianPosterior, H3RiskProfile, PremiumRecord
 from models.trigger import PerilType, TriggerEvent, TriggerLevel
@@ -10,6 +11,8 @@ __all__ = [
     "BayesianPosterior",
     "Claim",
     "ClaimStatus",
+    "Payout",
+    "PayoutStatus",
     "H3RiskProfile",
     "PerilType",
     "PlanType",

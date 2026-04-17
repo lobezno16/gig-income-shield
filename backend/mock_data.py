@@ -60,7 +60,7 @@ MOCK_TRIGGER_EVENTS = [
         "workers_affected": 234,
         "total_payout_inr": 114000,
         "triggered_at": "2026-04-01T18:00:00+05:30",
-        "label": "AQI 380 — Dwarka/Janakpuri, Delhi NCR",
+        "label": "AQI 380 - Dwarka/Janakpuri, Delhi NCR",
     },
     {
         "id": "trg_002",
@@ -74,21 +74,21 @@ MOCK_TRIGGER_EVENTS = [
         "workers_affected": 189,
         "total_payout_inr": 113400,
         "triggered_at": "2026-04-05T14:14:00+05:30",
-        "label": "110mm Rainfall — Dharavi/Kurla, Mumbai",
+        "label": "110mm Rainfall - Dharavi/Kurla, Mumbai",
     },
     {
         "id": "trg_003",
-        "peril": "store",
-        "source": "platform_api",
-        "reading_value": 65,
+        "peril": "curfew",
+        "source": "tomtom_traffic",
+        "reading_value": 52,
         "trigger_level": 2,
         "payout_pct": 0.60,
-        "city": "delhi",
-        "h3_hex": "872a10749ffffff",
+        "city": "bangalore",
+        "h3_hex": "872d9e6c3ffffff",
         "workers_affected": 78,
         "total_payout_inr": 46800,
         "triggered_at": "2026-04-08T11:00:00+05:30",
-        "label": "65% Dark-Store Closure — Lajpat Nagar, Delhi",
+        "label": "Traffic Delay 52 min/km - Koramangala/HSR, Bangalore",
     },
 ]
 
@@ -108,19 +108,19 @@ MOCK_TIMELINE_TEMPLATE = [
     {
         "id": "trigger_detected",
         "label": "Disruption Detected",
-        "description": "AQI 380 recorded at CPCB station — Dwarka zone",
+        "description": "AQI 380 recorded at CPCB station - Dwarka zone",
         "timestamp": "Apr 1, 6:00 PM",
     },
     {
         "id": "eligibility_check",
         "label": "Eligibility Verified",
-        "description": "Active policy · Warranty met · Zone confirmed",
+        "description": "Active policy | Warranty met | Zone confirmed",
         "timestamp": "Apr 1, 6:01 PM",
     },
     {
         "id": "fraud_check",
         "label": "Verification Complete",
-        "description": "Trust score: 0.91 · All 4 layers passed",
+        "description": "Trust score: 0.91 | All 4 layers passed",
         "timestamp": "Apr 1, 6:01 PM",
     },
     {
@@ -138,7 +138,7 @@ MOCK_TIMELINE_TEMPLATE = [
     {
         "id": "confirmed",
         "label": "Payment Confirmed",
-        "description": "UPI Ref: HDFC83920182 · SMS sent",
+        "description": "UPI Ref: HDFC83920182 | SMS sent",
         "timestamp": "Apr 1, 6:05 PM",
     },
 ]
@@ -146,4 +146,3 @@ MOCK_TIMELINE_TEMPLATE = [
 
 def now_ist_iso() -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)).isoformat()
-

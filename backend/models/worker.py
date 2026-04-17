@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import Boolean, DateTime, Enum, Integer, Numeric, String, text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Enum, Integer, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,10 @@ class WorkerTier(str, enum.Enum):
 
 class Worker(Base):
     __tablename__ = "workers"
+    __table_args__ = (
+        CheckConstraint("shift_start_hour >= 0 AND shift_start_hour <= 23", name="ck_workers_shift_start_hour"),
+        CheckConstraint("shift_end_hour >= 0 AND shift_end_hour <= 23", name="ck_workers_shift_end_hour"),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
     phone: Mapped[str] = mapped_column(String(15), unique=True, nullable=False)
@@ -39,6 +43,8 @@ class Worker(Base):
     active_days_30: Mapped[int] = mapped_column(Integer, default=0)
     total_deliveries: Mapped[int] = mapped_column(Integer, default=0)
     trust_score_floor: Mapped[float] = mapped_column(Numeric(3, 2), default=0.40)
+    shift_start_hour: Mapped[int] = mapped_column(Integer, default=8, server_default="8")
+    shift_end_hour: Mapped[int] = mapped_column(Integer, default=23, server_default="23")
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role_enum"), nullable=False, server_default="worker")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=text("NOW()"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

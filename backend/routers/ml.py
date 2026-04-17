@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from constants import H3_ZONES
+from constants import H3_ZONES, SUPPORTED_PARAMETRIC_PERILS, is_supported_parametric_peril
 from database import get_db
 from dependencies import require_admin
 from models import BCRRecord, BayesianPosterior, H3RiskProfile, Policy, Worker
@@ -80,6 +80,14 @@ async def bayesian_posterior(
 ):
     request_id = request_id_from_request(request)
     peril_key = peril.lower()
+    if not is_supported_parametric_peril(peril_key):
+        return error_response(
+            "VALIDATION_ERROR",
+            "Unsupported peril for parametric income product.",
+            details={"supported_perils": list(SUPPORTED_PARAMETRIC_PERILS)},
+            status_code=400,
+            request_id=request_id,
+        )
 
     posterior = (
         await db.execute(

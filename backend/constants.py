@@ -1,5 +1,20 @@
 from datetime import date
 
+# Product-level constraints for Soteria Phase 3.
+PRODUCT_CODE = "parametric_income_protection"
+BILLING_CADENCE = "weekly"
+LOSS_SCOPE = "loss_of_income_only"
+
+# Strictly supported operational perils for zero-touch income protection.
+SUPPORTED_PARAMETRIC_PERILS = ("rain", "curfew", "aqi")
+ALL_COVERED_PERILS = list(SUPPORTED_PARAMETRIC_PERILS)
+
+PERIL_TRIGGER_RULES = {
+    "rain": "Heavy rain greater than 15 mm/hr",
+    "curfew": "Traffic disruption greater than 40 min/km",
+    "aqi": "AQI greater than 450",
+}
+
 IRDAI_EXCLUSIONS = [
     "War, invasion, act of foreign enemy, hostilities, civil war, rebellion",
     "Nuclear reaction, radiation, or radioactive contamination",
@@ -9,9 +24,9 @@ IRDAI_EXCLUSIONS = [
     "Intentional self-inflicted loss or criminal activity by the insured",
     "Loss arising outside the territory of India",
     "Pre-existing non-working status prior to policy activation (7-day warranty period)",
-    "Vehicle repairs, mechanical breakdown — vehicle insurance is out of scope",
-    "Health conditions, injuries, medical expenses — health insurance is out of scope",
-    "Loss of life or bodily injury — life/accident insurance is out of scope",
+    "Vehicle repairs, mechanical breakdown - vehicle insurance is out of scope",
+    "Health conditions, injuries, medical expenses - health insurance is out of scope",
+    "Loss of life or bodily injury - life/accident insurance is out of scope",
 ]
 
 H3_ZONES = {
@@ -23,11 +38,14 @@ H3_ZONES = {
     "874d44473ffffff": {"city": "chennai", "area": "velachery_tambaram", "urban_tier": 1, "pool": "chennai_rain_pool"},
     "874d444b3ffffff": {"city": "chennai", "area": "anna_nagar", "urban_tier": 1, "pool": "chennai_rain_pool"},
     "872d9e6c3ffffff": {"city": "bangalore", "area": "koramangala_hsr", "urban_tier": 1, "pool": "bangalore_mixed_pool"},
-    "872d9e6dbffffff": {"city": "bangalore", "area": "whitefield_marathahalli", "urban_tier": 1, "pool": "bangalore_mixed_pool"},
+    "872d9e6dbffffff": {
+        "city": "bangalore",
+        "area": "whitefield_marathahalli",
+        "urban_tier": 1,
+        "pool": "bangalore_mixed_pool",
+    },
     "8730e88abffffff": {"city": "kolkata", "area": "salt_lake_newtown", "urban_tier": 4, "pool": "kolkata_flood_pool"},
 }
-
-ALL_COVERED_PERILS = ["aqi", "rain", "heat", "flood", "storm", "curfew", "store"]
 
 CITY_POOL_DEFAULTS = {
     "delhi": "delhi_aqi_pool",
@@ -72,11 +90,14 @@ DEMO_TRIGGER_EVENT = {
     "workers_affected": 234,
     "total_payout_inr": 114000,
     "triggered_at": "2026-04-04T19:10:00+05:30",
-    "label": "AQI 380 — Dwarka/Janakpuri, Delhi NCR",
+    "label": "AQI 380 - Dwarka/Janakpuri, Delhi NCR",
 }
+
+
+def is_supported_parametric_peril(peril: str) -> bool:
+    return peril.strip().lower() in SUPPORTED_PARAMETRIC_PERILS
 
 
 def week_start_today() -> date:
     today = date.today()
     return today.fromordinal(today.toordinal() - today.weekday())
-
