@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import h3
+import httpx
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import or_, select
@@ -174,6 +175,7 @@ class MultiOracleTriggerEngine:
         self.settings = get_settings()
         self.scheduler = AsyncIOScheduler()
         self.started = False
+        self._client: httpx.AsyncClient | None = None
 
     def start(self) -> None:
         if self.started:
@@ -212,6 +214,9 @@ class MultiOracleTriggerEngine:
         if not self.started:
             return
         self.scheduler.shutdown(wait=False)
+        if self._client:
+            asyncio.create_task(self._client.aclose())
+            self._client = None
         self.started = False
         logger.info("trigger_cron_stopped")
 
@@ -235,8 +240,11 @@ class MultiOracleTriggerEngine:
         return existing is not None
 
     async def poll(self) -> None:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=10.0)
+
         now = datetime.now(timezone.utc)
-        snapshots = await generate_multi_oracle_snapshots(now)
+        snapshots = await generate_multi_oracle_snapshots(now, client=self._client)
         if not snapshots:
             logger.info("multi_oracle_poll_empty")
             return

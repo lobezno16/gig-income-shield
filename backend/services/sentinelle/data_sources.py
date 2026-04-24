@@ -286,23 +286,32 @@ class RealDataFetcher:
     OWM_BASE = "https://api.openweathermap.org/data/2.5"
     WAQI_BASE = "https://api.waqi.info"
 
-    def __init__(self) -> None:
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         self.settings = get_settings()
+        self.client = client
+
+    async def _get_payload(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
+        if self.client:
+            response = await self.client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            return response.json()
 
     async def fetch_weather(self, city: str) -> dict[str, Any]:
         lat, lon = CITY_COORDINATES[city]
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{self.OWM_BASE}/weather",
-                params={
-                    "lat": lat,
-                    "lon": lon,
-                    "appid": self.settings.owm_api_key,
-                    "units": "metric",
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
+        payload = await self._get_payload(
+            f"{self.OWM_BASE}/weather",
+            params={
+                "lat": lat,
+                "lon": lon,
+                "appid": self.settings.owm_api_key,
+                "units": "metric",
+            },
+        )
 
         return {
             "rain_mm_per_hr": _safe_float(payload.get("rain", {}).get("1h"), 0.0),
@@ -313,17 +322,14 @@ class RealDataFetcher:
     async def fetch_traffic(self, city: str) -> dict[str, Any]:
         lat, lon = CITY_COORDINATES[city]
         endpoint = f"{self.settings.tomtom_base_url}/flowSegmentData/relative0/10/json"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                endpoint,
-                params={
-                    "point": f"{lat},{lon}",
-                    "unit": "KMPH",
-                    "key": self.settings.tomtom_api_key,
-                },
-            )
-            response.raise_for_status()
-            payload = response.json()
+        payload = await self._get_payload(
+            endpoint,
+            params={
+                "point": f"{lat},{lon}",
+                "unit": "KMPH",
+                "key": self.settings.tomtom_api_key,
+            },
+        )
 
         segment = payload.get("flowSegmentData", {})
         current_speed = _safe_float(segment.get("currentSpeed"), 0.0)
@@ -341,13 +347,10 @@ class RealDataFetcher:
 
     async def fetch_aqi(self, city: str) -> dict[str, Any]:
         if self.settings.cpcb_api_key:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(
-                    f"{self.settings.cpcb_base_url}/v1/aqi/city",
-                    params={"city": city, "apikey": self.settings.cpcb_api_key},
-                )
-                response.raise_for_status()
-                payload = response.json()
+            payload = await self._get_payload(
+                f"{self.settings.cpcb_base_url}/v1/aqi/city",
+                params={"city": city, "apikey": self.settings.cpcb_api_key},
+            )
 
             # Supports common CPCB payload shapes without tightly coupling to one schema.
             aqi_value = _safe_float(
@@ -358,13 +361,10 @@ class RealDataFetcher:
             )
             return {"aqi": round(aqi_value, 2), "source": "cpcb_live"}
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                f"{self.WAQI_BASE}/feed/{CITY_TOKENS[city]}/",
-                params={"token": self.settings.waqi_api_key},
-            )
-            response.raise_for_status()
-            payload = response.json()
+        payload = await self._get_payload(
+            f"{self.WAQI_BASE}/feed/{CITY_TOKENS[city]}/",
+            params={"token": self.settings.waqi_api_key},
+        )
         if payload.get("status") == "ok":
             return {"aqi": round(_safe_float((payload.get("data") or {}).get("aqi"), 0.0), 2), "source": "waqi_live"}
         return {"aqi": 0.0, "source": "waqi_live"}
@@ -378,7 +378,7 @@ def _build_zone_contexts() -> list[tuple[str, str]]:
     return contexts
 
 
-async def generate_multi_oracle_snapshots(now: datetime) -> list[MultiOracleSnapshot]:
+async def generate_multi_oracle_snapshots(now: datetime, client: httpx.AsyncClient | None = None) -> list[MultiOracleSnapshot]:
     zone_contexts = _build_zone_contexts()
     if not zone_contexts:
         return []
@@ -392,7 +392,7 @@ async def generate_multi_oracle_snapshots(now: datetime) -> list[MultiOracleSnap
     aqi_by_city: dict[str, dict[str, Any]] = {}
 
     if settings.has_real_weather_data or settings.has_real_traffic_data or settings.has_real_aqi_data:
-        fetcher = RealDataFetcher()
+        fetcher = RealDataFetcher(client=client)
         weather_tasks = {
             city: asyncio.create_task(fetcher.fetch_weather(city))
             for city in cities
