@@ -287,6 +287,128 @@ async def profile_me(
     )
 
 
+def _build_paid_claims_summary_subquery():
+    return (
+        select(
+            Claim.worker_id.label("worker_id"),
+            func.coalesce(
+                func.sum(
+                    case((Claim.status == ClaimStatus.paid, Claim.payout_amount), else_=0),
+                ),
+                0,
+            ).label("total_paid_inr"),
+            func.coalesce(
+                func.sum(
+                    case((Claim.status == ClaimStatus.paid, 1), else_=0),
+                ),
+                0,
+            ).label("paid_count"),
+            func.max(
+                case((Claim.status == ClaimStatus.paid, Claim.settled_at), else_=None),
+            ).label("last_claim_date"),
+        )
+        .group_by(Claim.worker_id)
+        .subquery()
+    )
+
+
+def _build_latest_policy_subquery():
+    latest_policy_ranked = (
+        select(
+            Policy.worker_id.label("worker_id"),
+            Policy.policy_number.label("policy_number"),
+            Policy.status.label("status"),
+            Policy.plan.label("plan"),
+            Policy.weekly_premium.label("weekly_premium"),
+            Policy.max_payout_week.label("max_payout_week"),
+            Policy.activated_at.label("activated_at"),
+            Policy.expires_at.label("expires_at"),
+            Policy.warranty_met.label("warranty_met"),
+            func.row_number()
+            .over(
+                partition_by=Policy.worker_id,
+                order_by=(
+                    case((Policy.status == PolicyStatus.active, 0), else_=1),
+                    Policy.created_at.desc(),
+                ),
+            )
+            .label("rn"),
+        )
+        .subquery()
+    )
+    return select(latest_policy_ranked).where(latest_policy_ranked.c.rn == 1).subquery()
+
+
+def _build_latest_trigger_subquery():
+    latest_trigger_ranked = (
+        select(
+            TriggerEvent.h3_hex.label("h3_hex"),
+            TriggerEvent.id.label("id"),
+            TriggerEvent.peril.label("peril"),
+            TriggerEvent.city.label("city"),
+            TriggerEvent.payout_pct.label("payout_pct"),
+            TriggerEvent.trigger_level.label("trigger_level"),
+            TriggerEvent.reading_value.label("reading_value"),
+            TriggerEvent.source.label("source"),
+            TriggerEvent.triggered_at.label("triggered_at"),
+            func.row_number().over(partition_by=TriggerEvent.h3_hex, order_by=TriggerEvent.triggered_at.desc()).label("rn"),
+        )
+        .where(TriggerEvent.triggered_at >= datetime.now(timezone.utc) - timedelta(hours=24))
+        .subquery()
+    )
+    return select(latest_trigger_ranked).where(latest_trigger_ranked.c.rn == 1).subquery()
+
+
+def _format_worker_dashboard_response(row):
+    policy = (
+        {
+            "policy_number": row["policy_number"],
+            "status": _enum_value(row["policy_status"]),
+            "plan": _enum_value(row["policy_plan"]),
+            "weekly_premium": float(row["weekly_premium"]),
+            "max_payout_week": float(row["max_payout_week"]),
+            "activated_at": row["activated_at"].isoformat() if row["activated_at"] else None,
+            "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
+            "warranty_met": bool(row["warranty_met"]),
+        }
+        if row["policy_number"]
+        else None
+    )
+    active_trigger = (
+        {
+            "id": str(row["trigger_id"]),
+            "peril": _enum_value(row["trigger_peril"]),
+            "peril_label": _enum_value(row["trigger_peril"]).replace("_", " ").title(),
+            "city": row["trigger_city"],
+            "payout_pct": float(row["trigger_payout_pct"]),
+            "trigger_level": int(row["trigger_level"]),
+            "reading_value": float(row["trigger_reading_value"]),
+            "source": row["trigger_source"],
+            "triggered_at": row["triggered_at"].isoformat() if row["triggered_at"] else None,
+        }
+        if row["trigger_id"]
+        else None
+    )
+
+    return {
+        "worker": {
+            "id": str(row["worker_id"]),
+            "name": row["worker_name"],
+            "phone": row["worker_phone"],
+            "platform": _enum_value(row["worker_platform"]),
+            "tier": _enum_value(row["worker_tier"]),
+            "city": row["worker_city"],
+        },
+        "policy": policy,
+        "claims_summary": {
+            "total_paid_inr": float(row["total_paid_inr"] or 0),
+            "paid_count": int(row["paid_count"] or 0),
+            "last_claim_date": row["last_claim_date"].isoformat() if row["last_claim_date"] else None,
+        },
+        "active_trigger": active_trigger,
+    }
+
+
 @router.get("/dashboard/{worker_id}")
 async def worker_dashboard(
     worker_id: str,
@@ -313,71 +435,9 @@ async def worker_dashboard(
             request_id=request_id,
         )
 
-    paid_claims_summary = (
-        select(
-            Claim.worker_id.label("worker_id"),
-            func.coalesce(
-                func.sum(
-                    case((Claim.status == ClaimStatus.paid, Claim.payout_amount), else_=0),
-                ),
-                0,
-            ).label("total_paid_inr"),
-            func.coalesce(
-                func.sum(
-                    case((Claim.status == ClaimStatus.paid, 1), else_=0),
-                ),
-                0,
-            ).label("paid_count"),
-            func.max(
-                case((Claim.status == ClaimStatus.paid, Claim.settled_at), else_=None),
-            ).label("last_claim_date"),
-        )
-        .group_by(Claim.worker_id)
-        .subquery()
-    )
-
-    latest_policy_ranked = (
-        select(
-            Policy.worker_id.label("worker_id"),
-            Policy.policy_number.label("policy_number"),
-            Policy.status.label("status"),
-            Policy.plan.label("plan"),
-            Policy.weekly_premium.label("weekly_premium"),
-            Policy.max_payout_week.label("max_payout_week"),
-            Policy.activated_at.label("activated_at"),
-            Policy.expires_at.label("expires_at"),
-            Policy.warranty_met.label("warranty_met"),
-            func.row_number()
-            .over(
-                partition_by=Policy.worker_id,
-                order_by=(
-                    case((Policy.status == PolicyStatus.active, 0), else_=1),
-                    Policy.created_at.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .subquery()
-    )
-    latest_policy = select(latest_policy_ranked).where(latest_policy_ranked.c.rn == 1).subquery()
-
-    latest_trigger_ranked = (
-        select(
-            TriggerEvent.h3_hex.label("h3_hex"),
-            TriggerEvent.id.label("id"),
-            TriggerEvent.peril.label("peril"),
-            TriggerEvent.city.label("city"),
-            TriggerEvent.payout_pct.label("payout_pct"),
-            TriggerEvent.trigger_level.label("trigger_level"),
-            TriggerEvent.reading_value.label("reading_value"),
-            TriggerEvent.source.label("source"),
-            TriggerEvent.triggered_at.label("triggered_at"),
-            func.row_number().over(partition_by=TriggerEvent.h3_hex, order_by=TriggerEvent.triggered_at.desc()).label("rn"),
-        )
-        .where(TriggerEvent.triggered_at >= datetime.now(timezone.utc) - timedelta(hours=24))
-        .subquery()
-    )
-    latest_trigger = select(latest_trigger_ranked).where(latest_trigger_ranked.c.rn == 1).subquery()
+    paid_claims_summary = _build_paid_claims_summary_subquery()
+    latest_policy = _build_latest_policy_subquery()
+    latest_trigger = _build_latest_trigger_subquery()
 
     stmt = (
         select(
@@ -423,53 +483,5 @@ async def worker_dashboard(
             request_id=request_id,
         )
 
-    policy = (
-        {
-            "policy_number": row["policy_number"],
-            "status": _enum_value(row["policy_status"]),
-            "plan": _enum_value(row["policy_plan"]),
-            "weekly_premium": float(row["weekly_premium"]),
-            "max_payout_week": float(row["max_payout_week"]),
-            "activated_at": row["activated_at"].isoformat() if row["activated_at"] else None,
-            "expires_at": row["expires_at"].isoformat() if row["expires_at"] else None,
-            "warranty_met": bool(row["warranty_met"]),
-        }
-        if row["policy_number"]
-        else None
-    )
-    active_trigger = (
-        {
-            "id": str(row["trigger_id"]),
-            "peril": _enum_value(row["trigger_peril"]),
-            "peril_label": _enum_value(row["trigger_peril"]).replace("_", " ").title(),
-            "city": row["trigger_city"],
-            "payout_pct": float(row["trigger_payout_pct"]),
-            "trigger_level": int(row["trigger_level"]),
-            "reading_value": float(row["trigger_reading_value"]),
-            "source": row["trigger_source"],
-            "triggered_at": row["triggered_at"].isoformat() if row["triggered_at"] else None,
-        }
-        if row["trigger_id"]
-        else None
-    )
-
-    return success_response(
-        {
-            "worker": {
-                "id": str(row["worker_id"]),
-                "name": row["worker_name"],
-                "phone": row["worker_phone"],
-                "platform": _enum_value(row["worker_platform"]),
-                "tier": _enum_value(row["worker_tier"]),
-                "city": row["worker_city"],
-            },
-            "policy": policy,
-            "claims_summary": {
-                "total_paid_inr": float(row["total_paid_inr"] or 0),
-                "paid_count": int(row["paid_count"] or 0),
-                "last_claim_date": row["last_claim_date"].isoformat() if row["last_claim_date"] else None,
-            },
-            "active_trigger": active_trigger,
-        },
-        request_id=request_id,
-    )
+    response_data = _format_worker_dashboard_response(row)
+    return success_response(response_data, request_id=request_id)
