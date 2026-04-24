@@ -55,9 +55,6 @@ export function AdminLayout({ children }: PropsWithChildren) {
       // Continue logout locally if API call fails.
     } finally {
       clearAuth();
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem("soteria_worker_v1");
-      }
       navigate("/register", { replace: true });
     }
   }

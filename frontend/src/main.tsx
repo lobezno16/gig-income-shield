@@ -52,13 +52,11 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
     const run = async () => {
       setIsLoading(true);
       const worker = await getMe();
-      const hasPersistedWorker = currentWorker !== null || Boolean(window.localStorage.getItem("soteria_worker_v1"));
 
       if (worker) {
         setCurrentWorker(worker);
-      } else if (hasPersistedWorker) {
+      } else {
         clearAuth();
-        window.localStorage.removeItem("soteria_worker_v1");
       }
 
       setIsLoading(false);
@@ -66,7 +64,7 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
     };
 
     void run();
-  }, [clearAuth, currentWorker, setCurrentWorker, setIsLoading]);
+  }, [clearAuth, setCurrentWorker, setIsLoading]);
 
   if (!isBootstrapped) {
     return <SessionLoadingScreen />;
