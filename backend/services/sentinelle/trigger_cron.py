@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from config import get_settings
 from database import AsyncSessionLocal
-from models import PerilType, Policy, PolicyStatus, TriggerEvent, Worker
-from services.claims_orchestrator import orchestrate_claim_for_worker
+from models import H3RiskProfile, PerilType, Policy, PolicyStatus, TriggerEvent, Worker
+from services.claims_orchestrator import orchestrate_claims_batch, orchestrate_claim_for_worker
 from services.renewal.weekly_renewal import run_weekly_renewal
 from services.sentinelle.data_sources import (
     MultiOracleSnapshot,
@@ -120,11 +120,23 @@ async def process_trigger_event_claims(
     ).all()
 
     summary = TriggerClaimSummary(scanned_policies=len(policy_rows))
+
+    # Bulk fetch risk profiles for the triggered hex for use in fraud eval or batch orchestration
+    risk_profiles = (
+        await db.execute(
+            select(H3RiskProfile)
+            .where(H3RiskProfile.h3_hex == trigger_hex_res9)
+        )
+    ).scalars().all()
+    risk_profile_dict = {rp.peril: rp for rp in risk_profiles}
+    # risk_profile_dict can now be passed to orchestrator functions or layers
+
     try:
         center_lat, center_lng = h3.cell_to_latlng(trigger_hex_res9)
     except Exception:
         center_lat, center_lng = (28.6139, 77.2090)
 
+    eligible_workers = []
     for policy, worker in policy_rows:
         if event.peril.value not in (policy.coverage_perils or []):
             continue
@@ -136,31 +148,30 @@ async def process_trigger_event_claims(
         if not is_hour_in_active_window(now.hour, shift_start, shift_end):
             continue
 
+        eligible_workers.append((worker, policy))
         summary.eligible_workers += 1
-        claim, _settlement = await orchestrate_claim_for_worker(
+
+    if eligible_workers:
+        batch_results = await orchestrate_claims_batch(
             db,
-            worker=worker,
+            eligible_workers=eligible_workers,
             trigger=event,
             gps_lat=center_lat,
             gps_lng=center_lng,
-            platform_active_at_trigger=True,
-            timestamp=now,
-            typical_shift_start=shift_start,
-            typical_shift_end=shift_end,
             oracle_snapshot=snapshot.oracle_snapshot_payload(),
+            timestamp=now,
         )
-        if claim is None:
-            continue
 
-        summary.claims_created += 1
-        claim_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
-        if claim_status == "blocked":
-            summary.claims_blocked += 1
-        elif claim_status == "flagged":
-            summary.claims_flagged += 1
-        elif claim_status == "approved":
-            summary.claims_approved += 1
-        summary.total_payout_inr += float(claim.payout_amount or 0)
+        for claim, _settlement in batch_results:
+            summary.claims_created += 1
+            claim_status = claim.status.value if hasattr(claim.status, "value") else str(claim.status)
+            if claim_status == "blocked":
+                summary.claims_blocked += 1
+            elif claim_status == "flagged":
+                summary.claims_flagged += 1
+            elif claim_status == "approved":
+                summary.claims_approved += 1
+            summary.total_payout_inr += float(claim.payout_amount or 0)
 
     event.total_payout_inr = round(summary.total_payout_inr, 2)
     await db.commit()

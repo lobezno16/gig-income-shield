@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 import structlog
@@ -9,8 +10,8 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from events import event_bus
-from models import Claim, ClaimStatus, Policy, PolicyStatus
-from services.argus.fraud_pipeline import ArgusFraudPipeline
+from models import Claim, ClaimStatus, Policy, PolicyStatus, Worker, TriggerEvent
+from services.argus.fraud_pipeline import ArgusFraudPipeline, FraudResult
 from services.argus.layer0_rules import Layer0ClaimData
 from services.hermes.settlement import _settle_claim_background
 from services.id_gen import generate_claim_number
@@ -149,3 +150,124 @@ async def orchestrate_claim_for_worker(
         "payout_amount": 0.0,
     }
 
+
+async def orchestrate_claims_batch(
+    db: AsyncSession,
+    *,
+    eligible_workers: Sequence[tuple[Worker, Policy]],
+    trigger: TriggerEvent,
+    gps_lat: float,
+    gps_lng: float,
+    oracle_snapshot: Mapping[str, Any] | None = None,
+    timestamp: datetime | None = None,
+) -> list[tuple[Claim, dict]]:
+    if not eligible_workers:
+        return []
+
+    argus = ArgusFraudPipeline()
+    now_ts = timestamp or datetime.now(timezone.utc)
+
+    claims_to_create = []
+    results = []
+
+    for worker, policy in eligible_workers:
+        claim_number = generate_claim_number()
+        shift_start = int(getattr(worker, "shift_start_hour", 8))
+        shift_end = int(getattr(worker, "shift_end_hour", 23))
+
+        fraud = await argus.evaluate(
+            db,
+            worker,
+            trigger,
+            Layer0ClaimData(
+                gps_lat=gps_lat,
+                gps_lng=gps_lng,
+                platform_active_at_trigger=True,
+                timestamp=now_ts,
+                typical_shift_start=shift_start,
+                typical_shift_end=shift_end,
+                device_telemetry=None,
+                recent_h3_pings=[],
+                oracle_snapshot=oracle_snapshot,
+            ),
+            claim_number=claim_number,
+        )
+
+        claim = Claim(
+            claim_number=claim_number,
+            worker_id=worker.id,
+            policy_id=policy.id,
+            trigger_id=trigger.id,
+            status=ClaimStatus(fraud.status),
+            payout_amount=0,
+            payout_pct=trigger.payout_pct,
+            fraud_score=fraud.combined_score,
+            fraud_flags=fraud.fraud_flags,
+            argus_layers=fraud.layers,
+        )
+        claims_to_create.append((claim, worker))
+
+    if not claims_to_create:
+        return []
+
+    # Batch insert
+    for claim, _ in claims_to_create:
+        db.add(claim)
+    await db.commit()
+
+    # UUIDs are generated at the client side by default when creating the model instance (if using default=uuid4, but here it's db side default)
+    # However, to avoid N+1 select queries during refresh, we can fetch them all in one query.
+    claim_numbers = [claim.claim_number for claim, _ in claims_to_create]
+    fetched_claims = (await db.execute(
+        select(Claim).where(Claim.claim_number.in_(claim_numbers))
+    )).scalars().all()
+    claim_map = {c.claim_number: c for c in fetched_claims}
+
+    try:
+        from services.sentinelle.trigger_monitor import trigger_monitor
+        if not trigger_monitor.started:
+            logger.warning("trigger_monitor_not_started_auto_starting")
+            trigger_monitor.start()
+    except Exception:
+        trigger_monitor = None
+        logger.warning("could_not_import_trigger_monitor")
+
+    for claim_obj, worker in claims_to_create:
+        claim = claim_map.get(claim_obj.claim_number, claim_obj)
+        await event_bus.publish(
+            "claims",
+            "new_claim",
+            {
+                "id": str(claim.id),
+                "claim_number": claim.claim_number,
+                "worker_id": str(claim.worker_id),
+                "worker_name": worker.name,
+                "status": claim.status.value,
+                "argus_score": float(claim.fraud_score or 0),
+            },
+        )
+
+        settlement_info = {
+            "settlement_status": "processing",
+            "attempts": 0,
+            "message": "Settlement queued. Payout will be processed within 60 seconds.",
+            "payout_amount": 0.0,
+        }
+
+        if trigger_monitor:
+            try:
+                trigger_monitor.scheduler.add_job(
+                    _settle_claim_background,
+                    trigger="date",
+                    args=[str(claim.id)],
+                    id=f"settle_{claim.id}",
+                    misfire_grace_time=60,
+                    replace_existing=True,
+                )
+            except Exception:
+                logger.exception("settlement_queue_failed", claim_id=str(claim.id), worker_id=str(worker.id))
+                settlement_info["message"] = "Settlement queue failed; claim remains in processing state."
+
+        results.append((claim, settlement_info))
+
+    return results
