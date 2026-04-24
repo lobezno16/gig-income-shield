@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from database import AsyncSessionLocal
-from models import Policy, PolicyStatus, PremiumRecord
+from models import Policy, PolicyStatus, PremiumRecord, BayesianPosterior, H3RiskProfile
 from services.athena.premium_engine import AthenaPremiumEngine
 
 logger = structlog.get_logger("renewal")
@@ -43,6 +43,19 @@ async def run_weekly_renewal() -> None:
         lapsed = 0
         skipped = 0
         engine = AthenaPremiumEngine(db)
+
+        # Pre-fetch probabilities to avoid N+1 queries in calculate_premium
+        prob_cache: dict[tuple[str, str], float] = {}
+        risk_profiles = (await db.execute(select(H3RiskProfile))).scalars().all()
+        for rp in risk_profiles:
+            prob_cache[(rp.h3_hex, rp.peril)] = float(rp.trigger_prob_p50) if rp.trigger_prob_p50 is not None else 0.12
+
+        posteriors = (await db.execute(select(BayesianPosterior))).scalars().all()
+        for bp in posteriors:
+            prob_cache[(bp.h3_hex, bp.peril)] = float(bp.trigger_prob)
+
+        engine.prob_cache = prob_cache
+
         for policy in active_policies:
             worker = policy.worker
             if worker is None:
