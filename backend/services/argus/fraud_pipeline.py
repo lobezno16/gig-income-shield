@@ -54,6 +54,88 @@ def combine_fraud_scores(trust: float, isolation: float, z_score: float, ring_fl
     return round(_clamp(weighted), 4)
 
 
+def _build_layers_dict(
+    layer1: Any, layer2: Any, layer3: Any, layer4: Any,
+    combined_score: float, status: str, requires_manual_review: bool
+) -> dict[str, Any]:
+    return {
+        "layer1_device_integrity": {
+            "passed": layer1.passed,
+            "decision": layer1.decision,
+            "risk_score": layer1.risk_score,
+            "flags": layer1.flags,
+            "evidence": layer1.evidence,
+        },
+        "layer2_h3_velocity": {
+            "passed": layer2.passed,
+            "decision": layer2.decision,
+            "risk_score": layer2.risk_score,
+            "flags": layer2.flags,
+            "evidence": layer2.evidence,
+        },
+        "layer3_behavioral_consistency": {
+            "passed": layer3.passed,
+            "decision": layer3.decision,
+            "risk_score": layer3.risk_score,
+            "flags": layer3.flags,
+            "evidence": layer3.evidence,
+        },
+        "layer4_multi_source_consensus": {
+            "passed": layer4.passed,
+            "decision": layer4.decision,
+            "risk_score": layer4.risk_score,
+            "flags": layer4.flags,
+            "evidence": layer4.evidence,
+        },
+        "summary": {
+            "combined_score": combined_score,
+            "status": status,
+            "requires_manual_review": requires_manual_review,
+            "scoring_weights": {
+                "layer1_device_integrity": 0.30,
+                "layer2_h3_velocity": 0.25,
+                "layer3_behavioral_consistency": 0.25,
+                "layer4_multi_source_consensus": 0.20,
+            },
+        },
+    }
+
+
+def _determine_status_and_flags(
+    layer1: Any, layer2: Any, layer3: Any, layer4: Any, combined_score: float
+) -> tuple[str, list[str], bool]:
+    hard_block = any(
+        [
+            layer1.decision == "blocked",
+            layer2.decision == "blocked",
+            layer3.decision == "blocked",
+            layer4.decision == "blocked",
+        ]
+    )
+    any_flagged = any(
+        [
+            layer1.decision == "flagged",
+            layer2.decision == "flagged",
+            layer3.decision == "flagged",
+            layer4.decision == "flagged",
+        ]
+    )
+
+    if hard_block:
+        status = "blocked"
+    elif any_flagged or combined_score >= 0.55:
+        status = "flagged"
+    else:
+        status = "approved"
+
+    fraud_flags = _dedupe_preserve_order(
+        layer1.flags + layer2.flags + layer3.flags + layer4.flags
+    )
+    requires_manual_review = status == "flagged"
+
+    return status, fraud_flags, requires_manual_review
+
+
 class ArgusFraudPipeline:
     """
     ARGUS v2 - four-layer async fraud pipeline:
@@ -93,75 +175,13 @@ class ArgusFraudPipeline:
             layer_scores["layer4_multi_source_consensus"],
         )
 
-        hard_block = any(
-            [
-                layer1.decision == "blocked",
-                layer2.decision == "blocked",
-                layer3.decision == "blocked",
-                layer4.decision == "blocked",
-            ]
-        )
-        any_flagged = any(
-            [
-                layer1.decision == "flagged",
-                layer2.decision == "flagged",
-                layer3.decision == "flagged",
-                layer4.decision == "flagged",
-            ]
+        status, fraud_flags, requires_manual_review = _determine_status_and_flags(
+            layer1, layer2, layer3, layer4, combined_score
         )
 
-        if hard_block:
-            status = "blocked"
-        elif any_flagged or combined_score >= 0.55:
-            status = "flagged"
-        else:
-            status = "approved"
-
-        fraud_flags = _dedupe_preserve_order(
-            layer1.flags + layer2.flags + layer3.flags + layer4.flags
+        layers = _build_layers_dict(
+            layer1, layer2, layer3, layer4, combined_score, status, requires_manual_review
         )
-        requires_manual_review = status == "flagged"
-        layers = {
-            "layer1_device_integrity": {
-                "passed": layer1.passed,
-                "decision": layer1.decision,
-                "risk_score": layer1.risk_score,
-                "flags": layer1.flags,
-                "evidence": layer1.evidence,
-            },
-            "layer2_h3_velocity": {
-                "passed": layer2.passed,
-                "decision": layer2.decision,
-                "risk_score": layer2.risk_score,
-                "flags": layer2.flags,
-                "evidence": layer2.evidence,
-            },
-            "layer3_behavioral_consistency": {
-                "passed": layer3.passed,
-                "decision": layer3.decision,
-                "risk_score": layer3.risk_score,
-                "flags": layer3.flags,
-                "evidence": layer3.evidence,
-            },
-            "layer4_multi_source_consensus": {
-                "passed": layer4.passed,
-                "decision": layer4.decision,
-                "risk_score": layer4.risk_score,
-                "flags": layer4.flags,
-                "evidence": layer4.evidence,
-            },
-            "summary": {
-                "combined_score": combined_score,
-                "status": status,
-                "requires_manual_review": requires_manual_review,
-                "scoring_weights": {
-                    "layer1_device_integrity": 0.30,
-                    "layer2_h3_velocity": 0.25,
-                    "layer3_behavioral_consistency": 0.25,
-                    "layer4_multi_source_consensus": 0.20,
-                },
-            },
-        }
 
         logger.info(
             "argus_v2_evaluated",
