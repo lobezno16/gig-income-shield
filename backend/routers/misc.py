@@ -22,21 +22,20 @@ def _enum_value(value):
     return value.value if hasattr(value, "value") else value
 
 
-@router.get("/zones/heatmap")
-async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
-    request_id = request_id_from_request(request)
-    profiles = (await db.execute(select(H3RiskProfile))).scalars().all()
+async def _get_posterior_map(db: AsyncSession) -> dict:
     posterior_rows = (
         await db.execute(
             select(BayesianPosterior.h3_hex, BayesianPosterior.peril, BayesianPosterior.trigger_prob)
         )
     ).all()
-    posterior_map = {
+    return {
         (row[0], str(_enum_value(row[1]))): float(row[2])
         for row in posterior_rows
         if str(_enum_value(row[1])) in SUPPORTED_PERILS
     }
 
+
+async def _get_workers_by_hex(db: AsyncSession) -> dict:
     workers_by_hex_rows = (
         await db.execute(
             select(Worker.h3_hex, func.count(Worker.id))
@@ -44,8 +43,10 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
             .group_by(Worker.h3_hex)
         )
     ).all()
-    workers_by_hex = {row[0]: int(row[1]) for row in workers_by_hex_rows}
+    return {row[0]: int(row[1]) for row in workers_by_hex_rows}
 
+
+async def _get_recent_claims_by_hex(db: AsyncSession) -> dict:
     recent_claims_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     recent_claims_rows = (
         await db.execute(
@@ -55,8 +56,10 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
             .group_by(TriggerEvent.h3_hex)
         )
     ).all()
-    recent_claims_by_hex = {row[0]: int(row[1]) for row in recent_claims_rows}
+    return {row[0]: int(row[1]) for row in recent_claims_rows}
 
+
+async def _get_latest_trigger_map(db: AsyncSession) -> dict:
     latest_trigger_ranked = (
         select(
             TriggerEvent.h3_hex.label("h3_hex"),
@@ -77,14 +80,16 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
     latest_trigger_rows = (
         await db.execute(select(latest_trigger_ranked).where(latest_trigger_ranked.c.rn == 1))
     ).mappings().all()
-    latest_trigger_map = {
+    return {
         (row["h3_hex"], str(_enum_value(row["peril"]))): row
         for row in latest_trigger_rows
         if str(_enum_value(row["peril"])) in SUPPORTED_PERILS
     }
 
+
+def _build_heatmap_response_data(profiles, posterior_map, workers_by_hex, recent_claims_by_hex, latest_trigger_map) -> list[dict]:
     if profiles:
-        data = [
+        return [
             {
                 "h3_hex": p.h3_hex,
                 "peril": p.peril,
@@ -122,7 +127,7 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
             if str(p.peril) in SUPPORTED_PERILS
         ]
     else:
-        data = [
+        return [
             {
                 "h3_hex": h3_hex,
                 "peril": "rain",
@@ -142,6 +147,24 @@ async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
             }
             for h3_hex, z in H3_ZONES.items()
         ]
+
+
+@router.get("/zones/heatmap")
+async def heatmap(request: Request, db: AsyncSession = Depends(get_db)):
+    request_id = request_id_from_request(request)
+    profiles = (await db.execute(select(H3RiskProfile))).scalars().all()
+    posterior_map = await _get_posterior_map(db)
+    workers_by_hex = await _get_workers_by_hex(db)
+    recent_claims_by_hex = await _get_recent_claims_by_hex(db)
+    latest_trigger_map = await _get_latest_trigger_map(db)
+
+    data = _build_heatmap_response_data(
+        profiles,
+        posterior_map,
+        workers_by_hex,
+        recent_claims_by_hex,
+        latest_trigger_map,
+    )
     return success_response({"hexes": data}, request_id=request_id)
 
 
