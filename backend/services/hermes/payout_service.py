@@ -104,72 +104,63 @@ async def _call_gateway_with_retries(
     return latest_result, attempts
 
 
-async def execute_idempotent_settlement(
+async def _handle_blocked_claim(
+    claim: Claim, payout_amount: float, idempotency_key: str, db: AsyncSession
+) -> IdempotentPayoutResult:
+    claim.payout_amount = payout_amount
+    claim.status = ClaimStatus.blocked
+    claim.upi_ref = None
+    claim.settled_at = None
+    await db.commit()
+    return IdempotentPayoutResult(
+        status="blocked",
+        payout_amount=payout_amount,
+        payout_pct_applied=0.0,
+        idempotency_key=idempotency_key,
+        attempts=0,
+        message="Blocked by ARGUS for admin review.",
+    )
+
+
+async def _handle_already_settled_payout(
+    claim: Claim, payout: Payout, payout_pct: float, idempotency_key: str, db: AsyncSession
+) -> IdempotentPayoutResult:
+    claim.status = ClaimStatus.paid
+    claim.payout_amount = float(payout.amount)
+    payout_id = payout.gateway_payout_id or ""
+    bank_ref = payout.gateway_bank_ref or ""
+    claim.upi_ref = encode_upi_ref(payout_id, bank_ref) if payout_id and bank_ref else None
+    claim.settled_at = payout.settled_at or datetime.now(timezone.utc)
+    await db.commit()
+    return IdempotentPayoutResult(
+        status="paid",
+        payout_amount=float(payout.amount),
+        payout_pct_applied=payout_pct,
+        idempotency_key=idempotency_key,
+        attempts=int(payout.attempt_count),
+        upi_result=RazorpayPayoutResult(
+            success=True,
+            provider=payout.provider,
+            id=payout.gateway_payout_id,
+            utr=payout.gateway_bank_ref,
+            amount=int(round(float(payout.amount) * 100)),
+            currency=payout.currency,
+            status="processed",
+        ),
+        message="Idempotent replay: payout already settled.",
+    )
+
+
+async def _upsert_pending_payout(
     claim: Claim,
     worker: Worker,
     trigger: TriggerEvent,
-    policy: Policy,
+    provider: str,
+    payout_amount: float,
+    idempotency_key: str,
+    payout: Payout | None,
     db: AsyncSession,
-) -> IdempotentPayoutResult:
-    """
-    Atomic 3-step payout flow:
-    1) Persist payout record in pending state (idempotency key bound to event+worker)
-    2) Call payment gateway
-    3) Update payout+claim to settled; on failure rollback claim to pending for safe retry
-    """
-    fraud_status = _resolve_fraud_status(claim)
-    payout_pct = payout_pct_from_fraud_status(fraud_status)
-    base_payout = _compute_base_payout(claim, worker, policy)
-    payout_amount = round(base_payout * payout_pct, 2)
-
-    if payout_pct == 0:
-        claim.payout_amount = payout_amount
-        claim.status = ClaimStatus.blocked
-        claim.upi_ref = None
-        claim.settled_at = None
-        await db.commit()
-        return IdempotentPayoutResult(
-            status="blocked",
-            payout_amount=payout_amount,
-            payout_pct_applied=0.0,
-            idempotency_key=build_idempotency_key(trigger.id, worker.id),
-            attempts=0,
-            message="Blocked by ARGUS for admin review.",
-        )
-
-    idempotency_key = build_idempotency_key(trigger.id, worker.id)
-    provider = settings.payment_provider.strip().lower() if settings.payment_provider else "razorpay_test"
-    if provider not in {"razorpay_test", "stripe_sandbox"}:
-        provider = "razorpay_test"
-
-    payout = await _get_existing_payout(db, idempotency_key)
-    if payout and payout.status == PayoutStatus.settled:
-        claim.status = ClaimStatus.paid
-        claim.payout_amount = float(payout.amount)
-        payout_id = payout.gateway_payout_id or ""
-        bank_ref = payout.gateway_bank_ref or ""
-        claim.upi_ref = encode_upi_ref(payout_id, bank_ref) if payout_id and bank_ref else None
-        claim.settled_at = payout.settled_at or datetime.now(timezone.utc)
-        await db.commit()
-        return IdempotentPayoutResult(
-            status="paid",
-            payout_amount=float(payout.amount),
-            payout_pct_applied=payout_pct,
-            idempotency_key=idempotency_key,
-            attempts=int(payout.attempt_count),
-            upi_result=RazorpayPayoutResult(
-                success=True,
-                provider=payout.provider,
-                id=payout.gateway_payout_id,
-                utr=payout.gateway_bank_ref,
-                amount=int(round(float(payout.amount) * 100)),
-                currency=payout.currency,
-                status="processed",
-            ),
-            message="Idempotent replay: payout already settled.",
-        )
-
-    # Step 1: create/update pending payout record and pin claim to pending(processing).
+) -> Payout:
     if payout is None:
         payout = Payout(
             claim_id=claim.id,
@@ -197,46 +188,53 @@ async def execute_idempotent_settlement(
     claim.upi_ref = None
     claim.settled_at = None
     await db.commit()
+    return payout
 
-    # Step 2: gateway call with deterministic idempotency key.
-    gateway_result, attempts = await _call_gateway_with_retries(
-        provider=provider,
-        upi_id=worker.upi_id_decrypted or "",
-        amount=payout_amount,
-        claim_number=claim.claim_number,
+
+async def _finalize_successful_payout(
+    claim: Claim,
+    payout: Payout,
+    payout_amount: float,
+    payout_pct: float,
+    idempotency_key: str,
+    attempts: int,
+    gateway_result: RazorpayPayoutResult,
+    now: datetime,
+    db: AsyncSession,
+) -> IdempotentPayoutResult:
+    payout.status = PayoutStatus.settled
+    payout.gateway_payout_id = gateway_result.payout_id
+    payout.gateway_bank_ref = gateway_result.bank_ref
+    payout.error_code = None
+    payout.error_message = None
+    payout.settled_at = now
+
+    claim.status = ClaimStatus.paid
+    claim.payout_amount = payout_amount
+    claim.upi_ref = encode_upi_ref(gateway_result.payout_id or "", gateway_result.bank_ref or "")
+    claim.settled_at = now
+    await db.commit()
+    await db.refresh(claim)
+    return IdempotentPayoutResult(
+        status="paid",
+        payout_amount=payout_amount,
+        payout_pct_applied=payout_pct,
         idempotency_key=idempotency_key,
+        attempts=attempts,
+        upi_result=gateway_result,
+        message="Settlement completed atomically.",
     )
 
-    now = datetime.now(timezone.utc)
-    payout.attempt_count = int(payout.attempt_count or 0) + attempts
-    payout.gateway_response = gateway_result.as_dict()
-    payout.updated_at = now
 
-    # Step 3: finalize or rollback claim state based on gateway response.
-    if gateway_result.success:
-        payout.status = PayoutStatus.settled
-        payout.gateway_payout_id = gateway_result.payout_id
-        payout.gateway_bank_ref = gateway_result.bank_ref
-        payout.error_code = None
-        payout.error_message = None
-        payout.settled_at = now
-
-        claim.status = ClaimStatus.paid
-        claim.payout_amount = payout_amount
-        claim.upi_ref = encode_upi_ref(gateway_result.payout_id or "", gateway_result.bank_ref or "")
-        claim.settled_at = now
-        await db.commit()
-        await db.refresh(claim)
-        return IdempotentPayoutResult(
-            status="paid",
-            payout_amount=payout_amount,
-            payout_pct_applied=payout_pct,
-            idempotency_key=idempotency_key,
-            attempts=attempts,
-            upi_result=gateway_result,
-            message="Settlement completed atomically.",
-        )
-
+async def _finalize_failed_payout(
+    claim: Claim,
+    payout: Payout,
+    payout_pct: float,
+    idempotency_key: str,
+    attempts: int,
+    gateway_result: RazorpayPayoutResult,
+    db: AsyncSession,
+) -> IdempotentPayoutResult:
     payout.status = PayoutStatus.gateway_timeout if gateway_result.timeout else PayoutStatus.failed
     payout.gateway_payout_id = None
     payout.gateway_bank_ref = None
@@ -257,4 +255,65 @@ async def execute_idempotent_settlement(
         attempts=attempts,
         upi_result=gateway_result,
         message="Gateway call failed; payout rolled back for safe retry.",
+    )
+
+
+async def execute_idempotent_settlement(
+    claim: Claim,
+    worker: Worker,
+    trigger: TriggerEvent,
+    policy: Policy,
+    db: AsyncSession,
+) -> IdempotentPayoutResult:
+    """
+    Atomic 3-step payout flow:
+    1) Persist payout record in pending state (idempotency key bound to event+worker)
+    2) Call payment gateway
+    3) Update payout+claim to settled; on failure rollback claim to pending for safe retry
+    """
+    fraud_status = _resolve_fraud_status(claim)
+    payout_pct = payout_pct_from_fraud_status(fraud_status)
+    base_payout = _compute_base_payout(claim, worker, policy)
+    payout_amount = round(base_payout * payout_pct, 2)
+
+    idempotency_key = build_idempotency_key(trigger.id, worker.id)
+
+    if payout_pct == 0:
+        return await _handle_blocked_claim(claim, payout_amount, idempotency_key, db)
+
+    provider = settings.payment_provider.strip().lower() if settings.payment_provider else "razorpay_test"
+    if provider not in {"razorpay_test", "stripe_sandbox"}:
+        provider = "razorpay_test"
+
+    payout = await _get_existing_payout(db, idempotency_key)
+    if payout and payout.status == PayoutStatus.settled:
+        return await _handle_already_settled_payout(claim, payout, payout_pct, idempotency_key, db)
+
+    # Step 1: create/update pending payout record and pin claim to pending(processing).
+    payout = await _upsert_pending_payout(
+        claim, worker, trigger, provider, payout_amount, idempotency_key, payout, db
+    )
+
+    # Step 2: gateway call with deterministic idempotency key.
+    gateway_result, attempts = await _call_gateway_with_retries(
+        provider=provider,
+        upi_id=worker.upi_id_decrypted or "",
+        amount=payout_amount,
+        claim_number=claim.claim_number,
+        idempotency_key=idempotency_key,
+    )
+
+    now = datetime.now(timezone.utc)
+    payout.attempt_count = int(payout.attempt_count or 0) + attempts
+    payout.gateway_response = gateway_result.as_dict()
+    payout.updated_at = now
+
+    # Step 3: finalize or rollback claim state based on gateway response.
+    if gateway_result.success:
+        return await _finalize_successful_payout(
+            claim, payout, payout_amount, payout_pct, idempotency_key, attempts, gateway_result, now, db
+        )
+
+    return await _finalize_failed_payout(
+        claim, payout, payout_pct, idempotency_key, attempts, gateway_result, db
     )
