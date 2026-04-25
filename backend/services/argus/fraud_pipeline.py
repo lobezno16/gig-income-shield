@@ -8,10 +8,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import TriggerEvent, Worker
 from services.argus.layer0_rules import Layer0ClaimData
-from services.argus.layer1_device_integrity import evaluate_device_integrity
-from services.argus.layer2_h3_velocity import evaluate_h3_velocity
-from services.argus.layer3_behavioral_consistency import evaluate_behavioral_consistency
-from services.argus.layer4_multi_source_consensus import evaluate_multi_source_consensus
+from services.argus.layer1_device_integrity import evaluate_device_integrity, DeviceIntegrityResult
+from services.argus.layer2_h3_velocity import evaluate_h3_velocity, H3VelocityResult
+from services.argus.layer3_behavioral_consistency import evaluate_behavioral_consistency, BehavioralConsistencyResult
+from services.argus.layer4_multi_source_consensus import evaluate_multi_source_consensus, MultiSourceConsensusResult
 
 logger = structlog.get_logger("soteria.argus.v2")
 
@@ -63,65 +63,32 @@ class ArgusFraudPipeline:
     4) Multi-source (Weather vs Traffic) Consensus
     """
 
-    async def evaluate(
-        self,
-        db: AsyncSession,
-        worker: Worker,
-        trigger: TriggerEvent,
-        claim_data: Layer0ClaimData,
-        claim_number: str | None = None,
-    ) -> FraudResult:
-        layer1 = await evaluate_device_integrity(claim_data)
-        layer2 = await evaluate_h3_velocity(claim_data, city=worker.city or trigger.city)
-        layer3 = await evaluate_behavioral_consistency(
-            db,
-            worker_id=worker.id,
-            target_h3_hex=trigger.h3_hex,
-        )
-        layer4 = await evaluate_multi_source_consensus(trigger, claim_data)
+    @staticmethod
+    def _determine_status(
+        layer1: DeviceIntegrityResult,
+        layer2: H3VelocityResult,
+        layer3: BehavioralConsistencyResult,
+        layer4: MultiSourceConsensusResult,
+        combined_score: float,
+    ) -> str:
+        decisions = [layer1.decision, layer2.decision, layer3.decision, layer4.decision]
+        if any(d == "blocked" for d in decisions):
+            return "blocked"
+        if any(d == "flagged" for d in decisions) or combined_score >= 0.55:
+            return "flagged"
+        return "approved"
 
-        layer_scores = {
-            "layer1_device_integrity": layer1.risk_score,
-            "layer2_h3_velocity": layer2.risk_score,
-            "layer3_behavioral_consistency": layer3.risk_score,
-            "layer4_multi_source_consensus": layer4.risk_score,
-        }
-        combined_score = combine_fraud_scores(
-            layer_scores["layer1_device_integrity"],
-            layer_scores["layer2_h3_velocity"],
-            layer_scores["layer3_behavioral_consistency"],
-            layer_scores["layer4_multi_source_consensus"],
-        )
-
-        hard_block = any(
-            [
-                layer1.decision == "blocked",
-                layer2.decision == "blocked",
-                layer3.decision == "blocked",
-                layer4.decision == "blocked",
-            ]
-        )
-        any_flagged = any(
-            [
-                layer1.decision == "flagged",
-                layer2.decision == "flagged",
-                layer3.decision == "flagged",
-                layer4.decision == "flagged",
-            ]
-        )
-
-        if hard_block:
-            status = "blocked"
-        elif any_flagged or combined_score >= 0.55:
-            status = "flagged"
-        else:
-            status = "approved"
-
-        fraud_flags = _dedupe_preserve_order(
-            layer1.flags + layer2.flags + layer3.flags + layer4.flags
-        )
-        requires_manual_review = status == "flagged"
-        layers = {
+    @staticmethod
+    def _build_layers_dict(
+        layer1: DeviceIntegrityResult,
+        layer2: H3VelocityResult,
+        layer3: BehavioralConsistencyResult,
+        layer4: MultiSourceConsensusResult,
+        combined_score: float,
+        status: str,
+        requires_manual_review: bool,
+    ) -> dict[str, Any]:
+        return {
             "layer1_device_integrity": {
                 "passed": layer1.passed,
                 "decision": layer1.decision,
@@ -162,6 +129,46 @@ class ArgusFraudPipeline:
                 },
             },
         }
+
+    async def evaluate(
+        self,
+        db: AsyncSession,
+        worker: Worker,
+        trigger: TriggerEvent,
+        claim_data: Layer0ClaimData,
+        claim_number: str | None = None,
+    ) -> FraudResult:
+        layer1 = await evaluate_device_integrity(claim_data)
+        layer2 = await evaluate_h3_velocity(claim_data, city=worker.city or trigger.city)
+        layer3 = await evaluate_behavioral_consistency(
+            db,
+            worker_id=worker.id,
+            target_h3_hex=trigger.h3_hex,
+        )
+        layer4 = await evaluate_multi_source_consensus(trigger, claim_data)
+
+        layer_scores = {
+            "layer1_device_integrity": layer1.risk_score,
+            "layer2_h3_velocity": layer2.risk_score,
+            "layer3_behavioral_consistency": layer3.risk_score,
+            "layer4_multi_source_consensus": layer4.risk_score,
+        }
+        combined_score = combine_fraud_scores(
+            layer_scores["layer1_device_integrity"],
+            layer_scores["layer2_h3_velocity"],
+            layer_scores["layer3_behavioral_consistency"],
+            layer_scores["layer4_multi_source_consensus"],
+        )
+
+        status = self._determine_status(layer1, layer2, layer3, layer4, combined_score)
+
+        fraud_flags = _dedupe_preserve_order(
+            layer1.flags + layer2.flags + layer3.flags + layer4.flags
+        )
+        requires_manual_review = status == "flagged"
+        layers = self._build_layers_dict(
+            layer1, layer2, layer3, layer4, combined_score, status, requires_manual_review
+        )
 
         logger.info(
             "argus_v2_evaluated",
