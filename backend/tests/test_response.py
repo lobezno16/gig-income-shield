@@ -1,87 +1,68 @@
 import json
-from unittest.mock import MagicMock
-
 import pytest
+import os
 from fastapi import Request
+from backend.response import success_response, error_response, request_id_from_request
 
-from response import error_response, request_id_from_request, success_response
-
+os.environ["SECRET_KEY"] = "this-is-a-very-long-secret-key-for-testing"
 
 def test_success_response_default():
     data = {"key": "value"}
-    resp = success_response(data)
-    assert resp["success"] is True
-    assert resp["data"] == data
-    assert "request_id" in resp["meta"]
-    assert "timestamp" in resp["meta"]
-    assert "version" in resp["meta"]
+    res = success_response(data)
+    assert res["success"] is True
+    assert res["data"] == data
+    assert "meta" in res
+    assert "request_id" in res["meta"]
+    assert "timestamp" in res["meta"]
+    assert "version" in res["meta"]
 
-
-def test_success_response_with_request_id():
+def test_success_response_custom_request_id():
     data = {"key": "value"}
-    request_id = "test-request-id"
-    resp = success_response(data, request_id=request_id)
-    assert resp["success"] is True
-    assert resp["data"] == data
-    assert resp["meta"]["request_id"] == request_id
-
+    req_id = "test-req-id"
+    res = success_response(data, request_id=req_id)
+    assert res["meta"]["request_id"] == req_id
 
 def test_error_response_default():
-    code = "TEST_ERROR"
-    message = "Test error message"
-    resp = error_response(code=code, message=message)
+    res = error_response(code="ERR_TEST", message="Test error message")
+    assert res.status_code == 400
 
-    assert resp.status_code == 400
+    body = json.loads(res.body.decode("utf-8"))
+    assert body["success"] is False
+    assert body["error"]["code"] == "ERR_TEST"
+    assert body["error"]["message"] == "Test error message"
+    assert body["error"]["details"] == {}
+    assert "meta" in body
+    assert "request_id" in body["meta"]
+    assert "timestamp" in body["meta"]
+    assert "version" in body["meta"]
 
-    content = json.loads(resp.body)
-    assert content["success"] is False
-    assert content["error"]["code"] == code
-    assert content["error"]["message"] == message
-    assert content["error"]["details"] == {}
-
-    assert "request_id" in content["meta"]
-    assert "timestamp" in content["meta"]
-    assert "version" in content["meta"]
-
-
-def test_error_response_custom_parameters():
-    code = "CUSTOM_ERROR"
-    message = "Custom error message"
-    details = {"field": "invalid"}
-    status_code = 404
-    request_id = "custom-request-id"
-
-    resp = error_response(
-        code=code,
-        message=message,
-        details=details,
-        status_code=status_code,
-        request_id=request_id,
+def test_error_response_custom():
+    res = error_response(
+        code="ERR_CUSTOM",
+        message="Custom error message",
+        details={"field": "invalid"},
+        status_code=404,
+        request_id="custom-req-id"
     )
+    assert res.status_code == 404
 
-    assert resp.status_code == 404
+    body = json.loads(res.body.decode("utf-8"))
+    assert body["success"] is False
+    assert body["error"]["code"] == "ERR_CUSTOM"
+    assert body["error"]["message"] == "Custom error message"
+    assert body["error"]["details"] == {"field": "invalid"}
+    assert body["meta"]["request_id"] == "custom-req-id"
 
-    content = json.loads(resp.body)
-    assert content["success"] is False
-    assert content["error"]["code"] == code
-    assert content["error"]["message"] == message
-    assert content["error"]["details"] == details
-    assert content["meta"]["request_id"] == request_id
+def test_request_id_from_request_with_state():
+    req = Request(scope={"type": "http", "state": {"request_id": "mock-req-id"}})
 
+    req_id = request_id_from_request(req)
+    assert req_id == "mock-req-id"
 
-def test_request_id_from_request_with_existing_id():
-    mock_request = MagicMock(spec=Request)
-    mock_request.state.request_id = "existing-request-id"
+def test_request_id_from_request_without_state():
+    req = Request(scope={"type": "http"})
 
-    request_id = request_id_from_request(mock_request)
-    assert request_id == "existing-request-id"
-
-
-def test_request_id_from_request_without_existing_id():
-    mock_request = MagicMock(spec=Request)
-    del mock_request.state.request_id
-
-    request_id = request_id_from_request(mock_request)
-    assert request_id is not None
-    assert isinstance(request_id, str)
-    assert len(request_id) > 0
+    req_id = request_id_from_request(req)
+    assert req_id is not None
+    assert isinstance(req_id, str)
+    assert len(req_id) > 0

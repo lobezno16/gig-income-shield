@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
 
 import type { Worker } from "../types";
 
@@ -17,60 +16,31 @@ interface WorkerState {
   setStatus: (s: WorkerStatus) => void;
 }
 
-type WorkerPersistSlice = Pick<WorkerState, "currentWorker" | "isAuthenticated" | "status">;
-
-const initialPersistedState: WorkerPersistSlice = {
+export const useWorkerStore = create<WorkerState>()((set) => ({
   currentWorker: null,
   isAuthenticated: false,
   status: "inactive",
-};
-
-export const useWorkerStore = create<WorkerState>()(
-  persist(
-    (set) => ({
-      ...initialPersistedState,
+  isLoading: false,
+  setCurrentWorker: (worker) =>
+    set({
+      currentWorker: worker,
+      isAuthenticated: true,
       isLoading: false,
-      setCurrentWorker: (worker) =>
-        set({
-          currentWorker: worker,
-          isAuthenticated: true,
-          isLoading: false,
-          status: worker.policy_status === "active" ? "covered" : "inactive",
-        }),
-      clearAuth: () =>
-        set(() => {
-          if (typeof window !== "undefined") {
-            window.localStorage.removeItem(WORKER_STORE_KEY);
-          }
-          return {
-            ...initialPersistedState,
-            isLoading: false,
-          };
-        }),
-      setIsLoading: (value) => set({ isLoading: value }),
-      setStatus: (status) => set({ status }),
+      status: worker.policy_status === "active" ? "covered" : "inactive",
     }),
-    {
-      name: WORKER_STORE_KEY,
-      version: 1,
-      storage: createJSONStorage(() => localStorage),
-      partialize: (state): WorkerPersistSlice => ({
-        currentWorker: state.currentWorker,
-        isAuthenticated: state.isAuthenticated,
-        status: state.status,
-      }),
-      migrate: (persistedState, version): WorkerPersistSlice => {
-        if (version !== 1 || !persistedState) {
-          return initialPersistedState;
-        }
-
-        const state = persistedState as Partial<WorkerPersistSlice>;
-        return {
-          currentWorker: state.currentWorker ?? null,
-          isAuthenticated: Boolean(state.isAuthenticated && state.currentWorker),
-          status: state.status ?? "inactive",
-        };
-      },
-    }
-  )
-);
+  clearAuth: () =>
+    set(() => {
+      // Keep proactive cleanup for existing users who may have the old key
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(WORKER_STORE_KEY);
+      }
+      return {
+        currentWorker: null,
+        isAuthenticated: false,
+        status: "inactive",
+        isLoading: false,
+      };
+    }),
+  setIsLoading: (value) => set({ isLoading: value }),
+  setStatus: (status) => set({ status }),
+}));
