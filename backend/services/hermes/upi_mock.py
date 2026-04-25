@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import random
+import secrets
 import string
 import time
 from dataclasses import dataclass
@@ -11,15 +10,9 @@ from typing import Any
 _IDEMPOTENCY_CACHE: dict[str, "RazorpayPayoutResult"] = {}
 
 
-def _random_token(length: int, rng: random.Random) -> str:
+def _random_token(length: int) -> str:
     alphabet = string.ascii_lowercase + string.digits
-    return "".join(rng.choice(alphabet) for _ in range(length))
-
-
-def _seeded_rng(key: str) -> random.Random:
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
-    seed = int(digest[:16], 16)
-    return random.Random(seed)
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 @dataclass
@@ -82,22 +75,21 @@ def _build_success_result(
     provider: str,
     amount: float,
     purpose: str,
-    rng: random.Random,
 ) -> RazorpayPayoutResult:
     gateway_prefix = "strp" if provider == "stripe_sandbox" else "pout"
     bank_prefix = "ICIC" if provider == "stripe_sandbox" else "HDFC"
     return RazorpayPayoutResult(
         success=True,
         provider=provider,
-        id=f"{gateway_prefix}_{_random_token(14, rng)}",
+        id=f"{gateway_prefix}_{_random_token(14)}",
         entity="payout",
-        fund_account_id=f"fa_{_random_token(12, rng)}",
+        fund_account_id=f"fa_{_random_token(12)}",
         amount=int(round(amount * 100)),
         currency="INR",
         fees=0,
         tax=0,
         status="processed",
-        utr=f"{bank_prefix}{rng.randint(10000000, 99999999)}",
+        utr=f"{bank_prefix}{secrets.SystemRandom().randint(10000000, 99999999)}",
         mode="UPI",
         purpose=purpose,
         created_at=int(time.time()),
@@ -128,11 +120,11 @@ async def mock_gateway_transfer(
     if idempotency_key in _IDEMPOTENCY_CACHE:
         return _IDEMPOTENCY_CACHE[idempotency_key]
 
-    rng = _seeded_rng(f"{provider}:{idempotency_key}")
+    rng = secrets.SystemRandom()
     await asyncio.sleep(rng.uniform(0.6, 1.8))
     roll = rng.random()
     if roll < 0.95:
-        result = _build_success_result(provider, amount, purpose, rng)
+        result = _build_success_result(provider, amount, purpose)
         _IDEMPOTENCY_CACHE[idempotency_key] = result
         return result
     if roll < 0.985:
@@ -156,4 +148,3 @@ async def mock_upi_transfer(
         purpose=purpose,
         idempotency_key=key,
     )
-

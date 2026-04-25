@@ -59,8 +59,4 @@ class Worker(Base):
             return None
         from crypto import decrypt_field
 
-        try:
-            return decrypt_field(self.upi_id)
-        except Exception:
-            # Supports backward compatibility for older plaintext rows prior to migration.
-            return self.upi_id
+        return decrypt_field(self.upi_id)
