@@ -29,6 +29,18 @@ class IdempotentPayoutResult:
     message: str = ""
 
 
+@dataclass
+class PayoutContext:
+    claim: Claim
+    worker: Worker
+    trigger: TriggerEvent
+    provider: str
+    payout_amount: float
+    payout_pct: float
+    idempotency_key: str
+    payout: Payout | None = None
+
+
 def encode_upi_ref(payout_id: str, bank_ref: str) -> str:
     return f"{payout_id}|{bank_ref}"
 
@@ -152,23 +164,17 @@ async def _handle_already_settled_payout(
 
 
 async def _upsert_pending_payout(
-    claim: Claim,
-    worker: Worker,
-    trigger: TriggerEvent,
-    provider: str,
-    payout_amount: float,
-    idempotency_key: str,
-    payout: Payout | None,
+    ctx: PayoutContext,
     db: AsyncSession,
 ) -> Payout:
-    if payout is None:
+    if ctx.payout is None:
         payout = Payout(
-            claim_id=claim.id,
-            worker_id=worker.id,
-            trigger_id=trigger.id,
-            idempotency_key=idempotency_key,
-            provider=provider,
-            amount=payout_amount,
+            claim_id=ctx.claim.id,
+            worker_id=ctx.worker.id,
+            trigger_id=ctx.trigger.id,
+            idempotency_key=ctx.idempotency_key,
+            provider=ctx.provider,
+            amount=ctx.payout_amount,
             currency="INR",
             status=PayoutStatus.pending,
             attempt_count=0,
@@ -176,50 +182,50 @@ async def _upsert_pending_payout(
         )
         db.add(payout)
     else:
-        payout.provider = provider
-        payout.amount = payout_amount
+        payout = ctx.payout
+        payout.provider = ctx.provider
+        payout.amount = ctx.payout_amount
         payout.currency = "INR"
         payout.status = PayoutStatus.pending
         payout.error_code = None
         payout.error_message = None
 
-    claim.status = ClaimStatus.processing
-    claim.payout_amount = payout_amount
-    claim.upi_ref = None
-    claim.settled_at = None
+    ctx.claim.status = ClaimStatus.processing
+    ctx.claim.payout_amount = ctx.payout_amount
+    ctx.claim.upi_ref = None
+    ctx.claim.settled_at = None
     await db.commit()
     return payout
 
 
 async def _finalize_successful_payout(
-    claim: Claim,
-    payout: Payout,
-    payout_amount: float,
-    payout_pct: float,
-    idempotency_key: str,
+    ctx: PayoutContext,
     attempts: int,
     gateway_result: RazorpayPayoutResult,
     now: datetime,
     db: AsyncSession,
 ) -> IdempotentPayoutResult:
-    payout.status = PayoutStatus.settled
-    payout.gateway_payout_id = gateway_result.payout_id
-    payout.gateway_bank_ref = gateway_result.bank_ref
-    payout.error_code = None
-    payout.error_message = None
-    payout.settled_at = now
+    if ctx.payout is None:
+        raise ValueError("Payout object must be initialized in PayoutContext for finalization.")
 
-    claim.status = ClaimStatus.paid
-    claim.payout_amount = payout_amount
-    claim.upi_ref = encode_upi_ref(gateway_result.payout_id or "", gateway_result.bank_ref or "")
-    claim.settled_at = now
+    ctx.payout.status = PayoutStatus.settled
+    ctx.payout.gateway_payout_id = gateway_result.payout_id
+    ctx.payout.gateway_bank_ref = gateway_result.bank_ref
+    ctx.payout.error_code = None
+    ctx.payout.error_message = None
+    ctx.payout.settled_at = now
+
+    ctx.claim.status = ClaimStatus.paid
+    ctx.claim.payout_amount = ctx.payout_amount
+    ctx.claim.upi_ref = encode_upi_ref(gateway_result.payout_id or "", gateway_result.bank_ref or "")
+    ctx.claim.settled_at = now
     await db.commit()
-    await db.refresh(claim)
+    await db.refresh(ctx.claim)
     return IdempotentPayoutResult(
         status="paid",
-        payout_amount=payout_amount,
-        payout_pct_applied=payout_pct,
-        idempotency_key=idempotency_key,
+        payout_amount=ctx.payout_amount,
+        payout_pct_applied=ctx.payout_pct,
+        idempotency_key=ctx.idempotency_key,
         attempts=attempts,
         upi_result=gateway_result,
         message="Settlement completed atomically.",
@@ -227,31 +233,31 @@ async def _finalize_successful_payout(
 
 
 async def _finalize_failed_payout(
-    claim: Claim,
-    payout: Payout,
-    payout_pct: float,
-    idempotency_key: str,
+    ctx: PayoutContext,
     attempts: int,
     gateway_result: RazorpayPayoutResult,
     db: AsyncSession,
 ) -> IdempotentPayoutResult:
-    payout.status = PayoutStatus.gateway_timeout if gateway_result.timeout else PayoutStatus.failed
-    payout.gateway_payout_id = None
-    payout.gateway_bank_ref = None
-    payout.error_code = (gateway_result.error or {}).get("code")
-    payout.error_message = (gateway_result.error or {}).get("description")
+    if ctx.payout is None:
+        raise ValueError("Payout object must be initialized in PayoutContext for finalization.")
 
-    claim.status = ClaimStatus.processing
-    claim.payout_amount = 0
-    claim.upi_ref = None
-    claim.settled_at = None
+    ctx.payout.status = PayoutStatus.gateway_timeout if gateway_result.timeout else PayoutStatus.failed
+    ctx.payout.gateway_payout_id = None
+    ctx.payout.gateway_bank_ref = None
+    ctx.payout.error_code = (gateway_result.error or {}).get("code")
+    ctx.payout.error_message = (gateway_result.error or {}).get("description")
+
+    ctx.claim.status = ClaimStatus.processing
+    ctx.claim.payout_amount = 0
+    ctx.claim.upi_ref = None
+    ctx.claim.settled_at = None
     await db.commit()
-    await db.refresh(claim)
+    await db.refresh(ctx.claim)
     return IdempotentPayoutResult(
         status="processing",
         payout_amount=0.0,
-        payout_pct_applied=payout_pct,
-        idempotency_key=idempotency_key,
+        payout_pct_applied=ctx.payout_pct,
+        idempotency_key=ctx.idempotency_key,
         attempts=attempts,
         upi_result=gateway_result,
         message="Gateway call failed; payout rolled back for safe retry.",
@@ -289,31 +295,36 @@ async def execute_idempotent_settlement(
     if payout and payout.status == PayoutStatus.settled:
         return await _handle_already_settled_payout(claim, payout, payout_pct, idempotency_key, db)
 
-    # Step 1: create/update pending payout record and pin claim to pending(processing).
-    payout = await _upsert_pending_payout(
-        claim, worker, trigger, provider, payout_amount, idempotency_key, payout, db
+    ctx = PayoutContext(
+        claim=claim,
+        worker=worker,
+        trigger=trigger,
+        provider=provider,
+        payout_amount=payout_amount,
+        payout_pct=payout_pct,
+        idempotency_key=idempotency_key,
+        payout=payout,
     )
+
+    # Step 1: create/update pending payout record and pin claim to pending(processing).
+    ctx.payout = await _upsert_pending_payout(ctx, db)
 
     # Step 2: gateway call with deterministic idempotency key.
     gateway_result, attempts = await _call_gateway_with_retries(
-        provider=provider,
-        upi_id=worker.upi_id_decrypted or "",
-        amount=payout_amount,
-        claim_number=claim.claim_number,
-        idempotency_key=idempotency_key,
+        provider=ctx.provider,
+        upi_id=ctx.worker.upi_id_decrypted or "",
+        amount=ctx.payout_amount,
+        claim_number=ctx.claim.claim_number,
+        idempotency_key=ctx.idempotency_key,
     )
 
     now = datetime.now(timezone.utc)
-    payout.attempt_count = int(payout.attempt_count or 0) + attempts
-    payout.gateway_response = gateway_result.as_dict()
-    payout.updated_at = now
+    ctx.payout.attempt_count = int(ctx.payout.attempt_count or 0) + attempts
+    ctx.payout.gateway_response = gateway_result.as_dict()
+    ctx.payout.updated_at = now
 
     # Step 3: finalize or rollback claim state based on gateway response.
     if gateway_result.success:
-        return await _finalize_successful_payout(
-            claim, payout, payout_amount, payout_pct, idempotency_key, attempts, gateway_result, now, db
-        )
+        return await _finalize_successful_payout(ctx, attempts, gateway_result, now, db)
 
-    return await _finalize_failed_payout(
-        claim, payout, payout_pct, idempotency_key, attempts, gateway_result, db
-    )
+    return await _finalize_failed_payout(ctx, attempts, gateway_result, db)
