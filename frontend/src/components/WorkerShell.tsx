@@ -64,9 +64,6 @@ export function WorkerShell({ activeTab, children, maxWidth = 920, pageTitle }: 
       // Continue sign-out flow even when API logout fails.
     } finally {
       clearAuth();
-      if (typeof window !== "undefined") {
-        window.localStorage.removeItem("soteria_worker_v1");
-      }
       setMenuOpen(false);
       setLoggingOut(false);
       navigate("/register", { replace: true });

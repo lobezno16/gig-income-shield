@@ -212,14 +212,7 @@ async def loss_ratio(request: Request, _admin: Worker = Depends(require_admin), 
     )
 
 
-@router.get("/overview")
-async def overview(request: Request, _admin: Worker = Depends(require_admin), db: AsyncSession = Depends(get_db)):
-    request_id = request_id_from_request(request)
-    now = datetime.now(timezone.utc)
-    week_start = now - timedelta(days=7)
-    previous_week_start = week_start - timedelta(days=7)
-    thirty_days_ago = now - timedelta(days=30)
-
+async def _overview_policy_worker_stats(db: AsyncSession, week_start: datetime) -> tuple[int, int, int]:
     active_policies = int((await db.execute(select(func.count(Policy.id)).where(Policy.status == PolicyStatus.active))).scalar_one())
     active_policies_prev = int(
         (
@@ -234,6 +227,10 @@ async def overview(request: Request, _admin: Worker = Depends(require_admin), db
         ).scalar_one()
     )
     total_workers = int((await db.execute(select(func.count(Worker.id)))).scalar_one())
+    return active_policies, active_policies_prev, total_workers
+
+
+async def _overview_premium_stats(db: AsyncSession, week_start: datetime, thirty_days_ago: datetime) -> tuple[float, float]:
     premiums_this_week = float(
         (
             await db.execute(
@@ -243,6 +240,19 @@ async def overview(request: Request, _admin: Worker = Depends(require_admin), db
             )
         ).scalar_one()
     )
+    premiums_30d = float(
+        (
+            await db.execute(
+                select(func.coalesce(func.sum(PremiumRecord.final_premium), 0)).where(
+                    PremiumRecord.week_start >= thirty_days_ago.date()
+                )
+            )
+        ).scalar_one()
+    )
+    return premiums_this_week, premiums_30d
+
+
+async def _overview_claim_stats(db: AsyncSession, week_start: datetime, previous_week_start: datetime, thirty_days_ago: datetime) -> tuple[float, int, float, int, int, float, float, float, float]:
     claims_paid_week = float(
         (
             await db.execute(
@@ -329,15 +339,6 @@ async def overview(request: Request, _admin: Worker = Depends(require_admin), db
             )
         ).scalar_one()
     )
-    premiums_30d = float(
-        (
-            await db.execute(
-                select(func.coalesce(func.sum(PremiumRecord.final_premium), 0)).where(
-                    PremiumRecord.week_start >= thirty_days_ago.date()
-                )
-            )
-        ).scalar_one()
-    )
     claims_30d = float(
         (
             await db.execute(
@@ -349,6 +350,40 @@ async def overview(request: Request, _admin: Worker = Depends(require_admin), db
             )
         ).scalar_one()
     )
+    return (
+        claims_paid_week,
+        claims_this_week_count,
+        claims_paid_prev_week,
+        claims_this_prev_week_count,
+        pending_review_count,
+        avg_fraud,
+        avg_fraud_prev,
+        avg_settlement_seconds,
+        claims_30d,
+    )
+
+
+@router.get("/overview")
+async def overview(request: Request, _admin: Worker = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+    request_id = request_id_from_request(request)
+    now = datetime.now(timezone.utc)
+    week_start = now - timedelta(days=7)
+    previous_week_start = week_start - timedelta(days=7)
+    thirty_days_ago = now - timedelta(days=30)
+
+    active_policies, active_policies_prev, total_workers = await _overview_policy_worker_stats(db, week_start)
+    premiums_this_week, premiums_30d = await _overview_premium_stats(db, week_start, thirty_days_ago)
+    (
+        claims_paid_week,
+        claims_this_week_count,
+        claims_paid_prev_week,
+        claims_this_prev_week_count,
+        pending_review_count,
+        avg_fraud,
+        avg_fraud_prev,
+        avg_settlement_seconds,
+        claims_30d,
+    ) = await _overview_claim_stats(db, week_start, previous_week_start, thirty_days_ago)
 
     pools, month_start = await _pool_bcr_current_month(db, now)
     highest_pool = max(pools, key=lambda item: item["bcr"]) if pools else None
