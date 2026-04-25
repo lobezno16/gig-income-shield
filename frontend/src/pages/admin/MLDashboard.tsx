@@ -170,14 +170,14 @@ export function MLDashboardPage() {
       <Card style={{ marginTop: 12 }}>
         <h2 style={{ marginTop: 0 }}>Bayesian Posterior by Hex</h2>
         <div className="admin-ml-controls">
-          <select className="input mono" style={{ width: 300 }} value={hex} onChange={(event) => setHex(event.target.value)}>
+          <select className="input mono" style={{ width: 300 }} value={hex} onChange={(event) => setHex(event.target.value)} aria-label="Select H3 Hex Zone">
             {Object.keys(H3_ZONES).map((value) => (
               <option key={value} value={value}>
                 {value}
               </option>
             ))}
           </select>
-          <select className="input" style={{ width: 180 }} value={peril} onChange={(event) => setPeril(event.target.value)}>
+          <select className="input" style={{ width: 180 }} value={peril} onChange={(event) => setPeril(event.target.value)} aria-label="Select Peril">
             {perilOptions.map((option) => (
               <option key={option} value={option}>
                 {option}
