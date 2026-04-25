@@ -1,6 +1,6 @@
 import json
-import pytest
 import os
+import uuid
 from fastapi import Request
 from backend.response import success_response, error_response, request_id_from_request
 
@@ -66,3 +66,13 @@ def test_request_id_from_request_without_state():
     assert req_id is not None
     assert isinstance(req_id, str)
     assert len(req_id) > 0
+
+
+def test_request_id_from_request_with_none_state_value():
+    req = Request(scope={"type": "http", "state": {"request_id": None}})
+
+    req_id = request_id_from_request(req)
+    assert req_id is not None
+    assert isinstance(req_id, str)
+    parsed_uuid = uuid.UUID(req_id)
+    assert str(parsed_uuid) == req_id
