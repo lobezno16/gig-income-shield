@@ -1,5 +1,3 @@
-import types
-
 import pytest
 
 from models.worker import Platform, WorkerTier

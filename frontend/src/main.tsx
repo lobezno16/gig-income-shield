@@ -38,7 +38,6 @@ function SessionLoadingScreen() {
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
-  const currentWorker = useWorkerStore((state) => state.currentWorker);
   const setCurrentWorker = useWorkerStore((state) => state.setCurrentWorker);
   const clearAuth = useWorkerStore((state) => state.clearAuth);
   const setIsLoading = useWorkerStore((state) => state.setIsLoading);
@@ -51,6 +50,12 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
 
     const run = async () => {
       setIsLoading(true);
+
+      // Proactively clean up any legacy state left over in localStorage
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem("soteria_worker_v1");
+      }
+
       const worker = await getMe();
 
       if (worker) {

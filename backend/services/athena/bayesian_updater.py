@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import BayesianPosterior, H3RiskProfile
@@ -45,6 +45,42 @@ class BayesianBetaBinomial:
         if risk and risk.trigger_prob_p50 is not None:
             return float(risk.trigger_prob_p50)
         return 0.12
+
+    async def get_bulk_trigger_probabilities(self, hex_peril_pairs: list[tuple[str, str]]) -> dict[tuple[str, str], float]:
+        if not hex_peril_pairs:
+            return {}
+
+        found_probs: dict[tuple[str, str], float] = {}
+
+        from sqlalchemy import tuple_
+
+        # Query BayesianPosterior using tuple in_ for robustness against large lists
+        stmt = select(BayesianPosterior).where(
+            tuple_(BayesianPosterior.h3_hex, BayesianPosterior.peril).in_(hex_peril_pairs)
+        )
+        result = await self.db.execute(stmt)
+        for record in result.scalars().all():
+            if record.trigger_prob is not None:
+                found_probs[(record.h3_hex, record.peril)] = float(record.trigger_prob)
+
+        # Identify missing pairs
+        missing_pairs = [pair for pair in hex_peril_pairs if pair not in found_probs]
+
+        if missing_pairs:
+            risk_stmt = select(H3RiskProfile).where(
+                tuple_(H3RiskProfile.h3_hex, H3RiskProfile.peril).in_(missing_pairs)
+            )
+            risk_result = await self.db.execute(risk_stmt)
+            for risk in risk_result.scalars().all():
+                if risk.trigger_prob_p50 is not None:
+                    found_probs[(risk.h3_hex, risk.peril)] = float(risk.trigger_prob_p50)
+
+        # Fallback for remaining pairs
+        for pair in missing_pairs:
+            if pair not in found_probs:
+                found_probs[pair] = 0.12
+
+        return found_probs
 
     async def _get_or_init_record(self, hex_id: str, peril: str) -> BayesianPosterior:
         stmt = select(BayesianPosterior).where(BayesianPosterior.h3_hex == hex_id, BayesianPosterior.peril == peril)

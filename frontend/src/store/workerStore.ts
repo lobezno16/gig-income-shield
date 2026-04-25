@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 import type { Worker } from "../types";
 
+const WORKER_STORE_KEY = "soteria_worker_v1";
 type WorkerStatus = "covered" | "alert" | "processing" | "action_req" | "inactive";
 
 interface WorkerState {
@@ -33,9 +34,9 @@ export const useWorkerStore = create<WorkerState>()((set) => ({
     }),
   clearAuth: () =>
     set(() => {
-      // Clean up legacy local storage if present
+      // Keep proactive cleanup for existing users who may have the old key
       if (typeof window !== "undefined") {
-        window.localStorage.removeItem("soteria_worker_v1");
+        window.localStorage.removeItem(WORKER_STORE_KEY);
       }
       return {
         ...initialState,
