@@ -16,10 +16,14 @@ interface WorkerState {
   setStatus: (s: WorkerStatus) => void;
 }
 
-export const useWorkerStore = create<WorkerState>()((set) => ({
+const initialState = {
   currentWorker: null,
   isAuthenticated: false,
-  status: "inactive",
+  status: "inactive" as WorkerStatus,
+};
+
+export const useWorkerStore = create<WorkerState>()((set) => ({
+  ...initialState,
   isLoading: false,
   setCurrentWorker: (worker) =>
     set({
@@ -35,9 +39,7 @@ export const useWorkerStore = create<WorkerState>()((set) => ({
         window.localStorage.removeItem(WORKER_STORE_KEY);
       }
       return {
-        currentWorker: null,
-        isAuthenticated: false,
-        status: "inactive",
+        ...initialState,
         isLoading: false,
       };
     }),
