@@ -24,6 +24,20 @@ def _as_aware_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def _validate_policy_eligibility(policy: Policy | None) -> dict | None:
+    if not policy:
+        return {"reason": "no_active_policy"}
+    expires_at = policy.expires_at
+    if expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            return {"reason": "policy_expired"}
+    if policy.status != PolicyStatus.active:
+        return {"reason": "policy_not_active"}
+    return None
+
+
 async def get_latest_active_policy(db: AsyncSession, worker_id: UUID) -> Policy | None:
     stmt = select(Policy).where(Policy.worker_id == worker_id).order_by(desc(Policy.created_at))
     policy = (await db.execute(stmt)).scalars().first()
@@ -41,57 +55,15 @@ async def get_latest_active_policy(db: AsyncSession, worker_id: UUID) -> Policy 
     return policy
 
 
-def _check_policy_validity(policy: Policy | None) -> str | None:
-    """Returns a reason string if policy is invalid, else None."""
-    if not policy:
-        return "no_active_policy"
-    expires_at = policy.expires_at
-    if expires_at:
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-        if expires_at < datetime.now(timezone.utc):
-            return "policy_expired"
-    if policy.status != PolicyStatus.active:
-        return "policy_not_active"
-    return None
-
-
-async def _evaluate_and_create_claim(
+async def _create_and_save_claim(
     db: AsyncSession,
     *,
     worker,
+    policy,
     trigger,
-    policy: Policy,
-    gps_lat: float,
-    gps_lng: float,
-    platform_active_at_trigger: bool,
-    timestamp: datetime | None,
-    typical_shift_start: int,
-    typical_shift_end: int,
-    device_telemetry: Mapping[str, Any] | None,
-    recent_h3_pings: list[Mapping[str, Any]] | None,
-    oracle_snapshot: Mapping[str, Any] | None,
+    claim_number: str,
+    fraud,
 ) -> Claim:
-    argus = ArgusFraudPipeline()
-    claim_number = generate_claim_number()
-    fraud = await argus.evaluate(
-        db,
-        worker,
-        trigger,
-        Layer0ClaimData(
-            gps_lat=gps_lat,
-            gps_lng=gps_lng,
-            platform_active_at_trigger=platform_active_at_trigger,
-            timestamp=timestamp or datetime.now(timezone.utc),
-            typical_shift_start=typical_shift_start,
-            typical_shift_end=typical_shift_end,
-            device_telemetry=device_telemetry,
-            recent_h3_pings=recent_h3_pings or [],
-            oracle_snapshot=oracle_snapshot,
-        ),
-        claim_number=claim_number,
-    )
-
     claim = Claim(
         claim_number=claim_number,
         worker_id=worker.id,
@@ -107,10 +79,7 @@ async def _evaluate_and_create_claim(
     db.add(claim)
     await db.commit()
     await db.refresh(claim)
-    return claim
 
-
-async def _publish_new_claim_event(claim: Claim, worker) -> None:
     await event_bus.publish(
         "claims",
         "new_claim",
@@ -123,9 +92,10 @@ async def _publish_new_claim_event(claim: Claim, worker) -> None:
             "argus_score": float(claim.fraud_score or 0),
         },
     )
+    return claim
 
 
-def _queue_claim_settlement(claim: Claim, worker) -> dict:
+def _queue_settlement_for_claim(claim: Claim, worker) -> dict:
     try:
         # Lazy import avoids module import cycle:
         # trigger_cron -> claims_orchestrator -> trigger_monitor -> trigger_cron
@@ -175,29 +145,38 @@ async def orchestrate_claim_for_worker(
     oracle_snapshot: Mapping[str, Any] | None = None,
 ) -> tuple[Claim | None, dict]:
     policy = await get_latest_active_policy(db, worker.id)
+    eligibility_error = _validate_policy_eligibility(policy)
+    if eligibility_error:
+        return None, eligibility_error
 
-    invalid_reason = _check_policy_validity(policy)
-    if invalid_reason:
-        return None, {"reason": invalid_reason}
-
-    claim = await _evaluate_and_create_claim(
+    argus = ArgusFraudPipeline()
+    claim_number = generate_claim_number()
+    fraud = await argus.evaluate(
         db,
-        worker=worker,
-        trigger=trigger,
-        policy=policy,
-        gps_lat=gps_lat,
-        gps_lng=gps_lng,
-        platform_active_at_trigger=platform_active_at_trigger,
-        timestamp=timestamp,
-        typical_shift_start=typical_shift_start,
-        typical_shift_end=typical_shift_end,
-        device_telemetry=device_telemetry,
-        recent_h3_pings=recent_h3_pings,
-        oracle_snapshot=oracle_snapshot,
+        worker,
+        trigger,
+        Layer0ClaimData(
+            gps_lat=gps_lat,
+            gps_lng=gps_lng,
+            platform_active_at_trigger=platform_active_at_trigger,
+            timestamp=timestamp or datetime.now(timezone.utc),
+            typical_shift_start=typical_shift_start,
+            typical_shift_end=typical_shift_end,
+            device_telemetry=device_telemetry,
+            recent_h3_pings=recent_h3_pings or [],
+            oracle_snapshot=oracle_snapshot,
+        ),
+        claim_number=claim_number,
     )
 
-    await _publish_new_claim_event(claim, worker)
+    claim = await _create_and_save_claim(
+        db,
+        worker=worker,
+        policy=policy,
+        trigger=trigger,
+        claim_number=claim_number,
+        fraud=fraud,
+    )
 
-    settlement_info = _queue_claim_settlement(claim, worker)
-
-    return claim, settlement_info
+    settlement_status = _queue_settlement_for_claim(claim, worker)
+    return claim, settlement_status
