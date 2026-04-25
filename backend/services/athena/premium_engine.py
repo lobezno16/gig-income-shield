@@ -79,12 +79,15 @@ class AthenaPremiumEngine:
         self.db = db
         self.rf_model = RandomForestPremiumModel()
 
-    async def calculate_premium(self, worker: Worker, plan: PlanType, pool_id: str, urban_tier: int) -> PremiumResult:
+    async def calculate_premium(self, worker: Worker, plan: PlanType, pool_id: str, urban_tier: int, prob_cache: dict[tuple[str, str], float] | None = None) -> PremiumResult:
         plan_cfg = PLAN_CONFIG[plan.value if isinstance(plan, PlanType) else str(plan)]
         primary_peril = POOL_PRIMARY_PERIL.get(pool_id, "rain")
 
-        bayes = BayesianBetaBinomial(self.db)
-        trigger_prob = await bayes.get_trigger_probability(worker.h3_hex, primary_peril)
+        if prob_cache is not None and (worker.h3_hex, primary_peril) in prob_cache:
+            trigger_prob = prob_cache[(worker.h3_hex, primary_peril)]
+        else:
+            bayes = BayesianBetaBinomial(self.db)
+            trigger_prob = await bayes.get_trigger_probability(worker.h3_hex, primary_peril)
 
         daily_income = DAILY_INCOME_BY_PLATFORM[worker.platform.value]
         days_exposed = int(plan_cfg["days"])

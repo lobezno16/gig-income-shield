@@ -175,11 +175,12 @@ class MultiOracleTriggerEngine:
         self.settings = get_settings()
         self.scheduler = AsyncIOScheduler()
         self.started = False
-        self._client: httpx.AsyncClient | None = None
+        self._http_client: httpx.AsyncClient | None = None
 
     def start(self) -> None:
         if self.started:
             return
+        self._http_client = httpx.AsyncClient(timeout=10.0)
         self.scheduler.add_job(
             self.poll,
             "interval",
@@ -214,9 +215,10 @@ class MultiOracleTriggerEngine:
         if not self.started:
             return
         self.scheduler.shutdown(wait=False)
-        if self._client:
-            asyncio.create_task(self._client.aclose())
-            self._client = None
+        if self._http_client:
+            import asyncio
+
+            asyncio.create_task(self._http_client.aclose())
         self.started = False
         logger.info("trigger_cron_stopped")
 
@@ -240,11 +242,8 @@ class MultiOracleTriggerEngine:
         return existing is not None
 
     async def poll(self) -> None:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=10.0)
-
         now = datetime.now(timezone.utc)
-        snapshots = await generate_multi_oracle_snapshots(now, client=self._client)
+        snapshots = await generate_multi_oracle_snapshots(now, client=self._http_client)
         if not snapshots:
             logger.info("multi_oracle_poll_empty")
             return
