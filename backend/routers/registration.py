@@ -71,6 +71,176 @@ def resolve_hex_and_zone(latitude: float, longitude: float, city: str) -> tuple[
     return fallback_hex, H3_ZONES[fallback_hex]
 
 
+async def _upsert_worker(
+    db: AsyncSession,
+    payload: EnrollmentRequest,
+    city: str,
+    hex_id: str,
+    active_days_30: int,
+    tier: WorkerTier,
+    shift_start_hour: int,
+    shift_end_hour: int,
+) -> Worker:
+    stmt = select(Worker).where(Worker.phone == payload.phone)
+    existing = (await db.execute(stmt)).scalar_one_or_none()
+    if existing:
+        worker = existing
+        worker.name = payload.name
+        worker.platform = Platform(payload.platform)
+        worker.platform_id = payload.platform_worker_id
+        worker.city = city
+        worker.h3_hex = hex_id
+        worker.upi_id = encrypt_field(payload.upi_id)
+        worker.active_days_30 = active_days_30
+        worker.total_deliveries = active_days_30 * 28
+        worker.tier = tier
+        worker.shift_start_hour = shift_start_hour
+        worker.shift_end_hour = shift_end_hour
+    else:
+        worker = Worker(
+            phone=payload.phone,
+            name=payload.name,
+            platform=Platform(payload.platform),
+            platform_id=payload.platform_worker_id,
+            city=city,
+            h3_hex=hex_id,
+            upi_id=encrypt_field(payload.upi_id),
+            tier=tier,
+            active_days_30=active_days_30,
+            total_deliveries=active_days_30 * 28,
+            shift_start_hour=shift_start_hour,
+            shift_end_hour=shift_end_hour,
+            is_active=True,
+        )
+        db.add(worker)
+    await db.flush()
+    return worker
+
+
+async def _lapse_existing_policies(db: AsyncSession, worker_id: int) -> None:
+    existing_policies = (
+        await db.execute(
+            select(Policy).where(
+                Policy.worker_id == worker_id,
+                Policy.status == PolicyStatus.active,
+            )
+        )
+    ).scalars().all()
+    for old_policy in existing_policies:
+        old_policy.status = PolicyStatus.lapsed
+    await db.flush()
+
+
+async def _create_policy_and_record(
+    db: AsyncSession,
+    worker: Worker,
+    plan: PlanType,
+    pool_id: str,
+    urban_tier: int,
+    premium,
+    activated_at: datetime,
+) -> Policy:
+    policy_number = generate_policy_number()
+    expires_at = activated_at + timedelta(days=30)
+    policy = Policy(
+        worker_id=worker.id,
+        policy_number=policy_number,
+        plan=plan,
+        status=PolicyStatus.active,
+        pool_id=pool_id,
+        urban_tier=urban_tier,
+        coverage_perils=ALL_COVERED_PERILS,
+        weekly_premium=premium.final_premium,
+        max_payout_week=premium.max_payout,
+        coverage_days=premium.days_covered,
+        warranty_met=worker.active_days_30 >= 7,
+        activated_at=activated_at,
+        expires_at=expires_at,
+        irdai_sandbox_id=DEFAULT_IRDAI_SANDBOX_ID,
+    )
+    db.add(policy)
+    await db.flush()
+
+    record = PremiumRecord(
+        worker_id=worker.id,
+        policy_id=policy.id,
+        week_start=activated_at.date(),
+        base_formula=premium.base_cost,
+        ml_adjustment=premium.ml_adjustment,
+        final_premium=premium.final_premium,
+        shap_values=premium.shap_values,
+        bayesian_probs={premium.peril: premium.trigger_probability},
+        features=premium.features,
+    )
+    db.add(record)
+    await db.commit()
+    await db.refresh(worker)
+    await db.refresh(policy)
+    return policy
+
+
+def _build_enrollment_response_data(worker: Worker, policy: Policy, premium, activated_at: datetime) -> dict:
+    shap_top = sorted(
+        [(k, v) for k, v in premium.shap_values.items() if isinstance(v, (float, int))],
+        key=lambda x: abs(x[1]),
+        reverse=True,
+    )[:3]
+
+    return {
+        "policy_number": policy.policy_number,
+        "worker": {
+            "id": str(worker.id),
+            "name": worker.name,
+            "phone": worker.phone,
+            "role": worker.role.value,
+            "platform": worker.platform.value,
+            "tier": worker.tier.value,
+            "h3_hex": worker.h3_hex,
+            "active_days_30": worker.active_days_30,
+        },
+        "coverage": {
+            "plan": policy.plan.value,
+            "status": policy.status.value,
+            "pool": policy.pool_id,
+            "urban_tier": policy.urban_tier,
+            "weekly_premium_inr": float(policy.weekly_premium),
+            "max_payout_per_week_inr": float(policy.max_payout_week),
+            "coverage_days_per_week": policy.coverage_days,
+            "covered_perils": policy.coverage_perils,
+            "warranty_met": policy.warranty_met,
+            "activated_at": policy.activated_at.isoformat() if policy.activated_at else None,
+            "expires_at": policy.expires_at.isoformat() if policy.expires_at else None,
+        },
+        "irdai_compliance": {
+            "sandbox_id": policy.irdai_sandbox_id,
+            "product_type": PRODUCT_CODE,
+            "exclusions_version": "v2.1",
+            "exclusions": IRDAI_EXCLUSIONS,
+            "loss_scope": LOSS_SCOPE,
+            "billing_cadence": BILLING_CADENCE,
+            "peril_trigger_rules": PERIL_TRIGGER_RULES,
+        },
+        "premium_this_week": {
+            "amount_inr": float(policy.weekly_premium),
+            "calculation_date": activated_at.date().isoformat(),
+            "trigger_probability": premium.trigger_probability,
+            "shap_top_features": [f"{k}: {v:+.1f}" for k, v in shap_top],
+            "breakdown": {
+                "trigger_probability": premium.trigger_probability,
+                "base_cost": premium.base_cost,
+                "city_factor": premium.city_factor,
+                "peril_factor": premium.peril_factor,
+                "tier_factor": premium.tier_factor,
+                "ml_adjustment": premium.ml_adjustment,
+                "raw_premium": premium.raw_premium,
+                "min_premium": premium.min_premium,
+                "max_premium": premium.max_premium_cap,
+                "final_premium": premium.final_premium,
+            },
+        },
+    }
+
+
 @router.post("/enroll")
 async def enroll_worker(
     payload: EnrollmentRequest,
@@ -124,153 +294,22 @@ async def enroll_worker(
     tier = tier_from_active_days(active_days_30)
     shift_start_hour, shift_end_hour = active_hour_window_from_platform(payload.platform)
 
-    stmt = select(Worker).where(Worker.phone == payload.phone)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
-    if existing:
-        worker = existing
-        worker.name = payload.name
-        worker.platform = Platform(payload.platform)
-        worker.platform_id = payload.platform_worker_id
-        worker.city = city
-        worker.h3_hex = hex_id
-        worker.upi_id = encrypt_field(payload.upi_id)
-        worker.active_days_30 = active_days_30
-        worker.total_deliveries = active_days_30 * 28
-        worker.tier = tier
-        worker.shift_start_hour = shift_start_hour
-        worker.shift_end_hour = shift_end_hour
-    else:
-        worker = Worker(
-            phone=payload.phone,
-            name=payload.name,
-            platform=Platform(payload.platform),
-            platform_id=payload.platform_worker_id,
-            city=city,
-            h3_hex=hex_id,
-            upi_id=encrypt_field(payload.upi_id),
-            tier=tier,
-            active_days_30=active_days_30,
-            total_deliveries=active_days_30 * 28,
-            shift_start_hour=shift_start_hour,
-            shift_end_hour=shift_end_hour,
-            is_active=True,
-        )
-        db.add(worker)
-    await db.flush()
+    worker = await _upsert_worker(
+        db, payload, city, hex_id, active_days_30, tier, shift_start_hour, shift_end_hour
+    )
 
-    existing_policies = (
-        await db.execute(
-            select(Policy).where(
-                Policy.worker_id == worker.id,
-                Policy.status == PolicyStatus.active,
-            )
-        )
-    ).scalars().all()
-    for old_policy in existing_policies:
-        old_policy.status = PolicyStatus.lapsed
-    await db.flush()
+    await _lapse_existing_policies(db, worker.id)
 
     plan = PlanType(payload.plan)
     athena = AthenaPremiumEngine(db)
     premium = await athena.calculate_premium(worker=worker, plan=plan, pool_id=pool_id, urban_tier=urban_tier)
 
-    policy_number = generate_policy_number()
     activated_at = datetime.now(timezone.utc)
-    expires_at = activated_at + timedelta(days=30)
-    policy = Policy(
-        worker_id=worker.id,
-        policy_number=policy_number,
-        plan=plan,
-        status=PolicyStatus.active,
-        pool_id=pool_id,
-        urban_tier=urban_tier,
-        coverage_perils=ALL_COVERED_PERILS,
-        weekly_premium=premium.final_premium,
-        max_payout_week=premium.max_payout,
-        coverage_days=premium.days_covered,
-        warranty_met=worker.active_days_30 >= 7,
-        activated_at=activated_at,
-        expires_at=expires_at,
-        irdai_sandbox_id=DEFAULT_IRDAI_SANDBOX_ID,
+    policy = await _create_policy_and_record(
+        db, worker, plan, pool_id, urban_tier, premium, activated_at
     )
-    db.add(policy)
-    await db.flush()
 
-    record = PremiumRecord(
-        worker_id=worker.id,
-        policy_id=policy.id,
-        week_start=activated_at.date(),
-        base_formula=premium.base_cost,
-        ml_adjustment=premium.ml_adjustment,
-        final_premium=premium.final_premium,
-        shap_values=premium.shap_values,
-        bayesian_probs={premium.peril: premium.trigger_probability},
-        features=premium.features,
-    )
-    db.add(record)
-    await db.commit()
-    await db.refresh(worker)
-    await db.refresh(policy)
-
-    shap_top = sorted(
-        [(k, v) for k, v in premium.shap_values.items() if isinstance(v, (float, int))],
-        key=lambda x: abs(x[1]),
-        reverse=True,
-    )[:3]
-
-    data = {
-        "policy_number": policy.policy_number,
-        "worker": {
-            "id": str(worker.id),
-            "name": worker.name,
-            "phone": worker.phone,
-            "role": worker.role.value,
-            "platform": worker.platform.value,
-            "tier": worker.tier.value,
-            "h3_hex": worker.h3_hex,
-            "active_days_30": worker.active_days_30,
-        },
-        "coverage": {
-            "plan": policy.plan.value,
-            "status": policy.status.value,
-            "pool": policy.pool_id,
-            "urban_tier": policy.urban_tier,
-            "weekly_premium_inr": float(policy.weekly_premium),
-            "max_payout_per_week_inr": float(policy.max_payout_week),
-            "coverage_days_per_week": policy.coverage_days,
-            "covered_perils": policy.coverage_perils,
-            "warranty_met": policy.warranty_met,
-            "activated_at": policy.activated_at.isoformat() if policy.activated_at else None,
-            "expires_at": policy.expires_at.isoformat() if policy.expires_at else None,
-        },
-        "irdai_compliance": {
-            "sandbox_id": policy.irdai_sandbox_id,
-            "product_type": PRODUCT_CODE,
-            "exclusions_version": "v2.1",
-            "exclusions": IRDAI_EXCLUSIONS,
-            "loss_scope": LOSS_SCOPE,
-            "billing_cadence": BILLING_CADENCE,
-            "peril_trigger_rules": PERIL_TRIGGER_RULES,
-        },
-        "premium_this_week": {
-            "amount_inr": float(policy.weekly_premium),
-            "calculation_date": activated_at.date().isoformat(),
-            "trigger_probability": premium.trigger_probability,
-            "shap_top_features": [f"{k}: {v:+.1f}" for k, v in shap_top],
-            "breakdown": {
-                "trigger_probability": premium.trigger_probability,
-                "base_cost": premium.base_cost,
-                "city_factor": premium.city_factor,
-                "peril_factor": premium.peril_factor,
-                "tier_factor": premium.tier_factor,
-                "ml_adjustment": premium.ml_adjustment,
-                "raw_premium": premium.raw_premium,
-                "min_premium": premium.min_premium,
-                "max_premium": premium.max_premium_cap,
-                "final_premium": premium.final_premium,
-            },
-        },
-    }
+    data = _build_enrollment_response_data(worker, policy, premium, activated_at)
 
     access_token = create_access_token(subject=str(worker.id), role=worker.role.value)
     refresh_token = create_refresh_token(subject=str(worker.id), role=worker.role.value)

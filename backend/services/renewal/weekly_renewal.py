@@ -7,8 +7,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from database import AsyncSessionLocal
-from models import Policy, PolicyStatus, PremiumRecord, BayesianPosterior, H3RiskProfile
-from services.athena.premium_engine import AthenaPremiumEngine
+from models import Policy, PolicyStatus, PremiumRecord
+from services.athena.premium_engine import AthenaPremiumEngine, POOL_PRIMARY_PERIL
+from services.athena.bayesian_updater import BayesianBetaBinomial
 
 logger = structlog.get_logger("renewal")
 
@@ -42,20 +43,19 @@ async def run_weekly_renewal() -> None:
         renewed = 0
         lapsed = 0
         skipped = 0
+
+        # Pre-fetch probabilities
+        hex_peril_pairs = set()
+        for policy in active_policies:
+            worker = policy.worker
+            if worker is not None:
+                primary_peril = POOL_PRIMARY_PERIL.get(policy.pool_id, "rain")
+                hex_peril_pairs.add((worker.h3_hex, primary_peril))
+
+        bayes = BayesianBetaBinomial(db)
+        prob_cache = await bayes.get_bulk_trigger_probabilities(list(hex_peril_pairs))
+
         engine = AthenaPremiumEngine(db)
-
-        # Pre-fetch probabilities to avoid N+1 queries in calculate_premium
-        prob_cache: dict[tuple[str, str], float] = {}
-        risk_profiles = (await db.execute(select(H3RiskProfile))).scalars().all()
-        for rp in risk_profiles:
-            prob_cache[(rp.h3_hex, rp.peril)] = float(rp.trigger_prob_p50) if rp.trigger_prob_p50 is not None else 0.12
-
-        posteriors = (await db.execute(select(BayesianPosterior))).scalars().all()
-        for bp in posteriors:
-            prob_cache[(bp.h3_hex, bp.peril)] = float(bp.trigger_prob)
-
-        engine.prob_cache = prob_cache
-
         for policy in active_policies:
             worker = policy.worker
             if worker is None:
@@ -89,7 +89,7 @@ async def run_weekly_renewal() -> None:
                 continue
 
             try:
-                result = await engine.calculate_premium(worker, policy.plan, policy.pool_id, policy.urban_tier)
+                result = await engine.calculate_premium(worker, policy.plan, policy.pool_id, policy.urban_tier, prob_cache=prob_cache)
                 base_expiry = expires_at if expires_at and expires_at > now else now
                 policy.weekly_premium = result.final_premium
                 policy.expires_at = base_expiry + timedelta(days=7)
