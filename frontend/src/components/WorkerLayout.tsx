@@ -67,7 +67,12 @@ export function WorkerLayout({ activeTab, children, maxWidth = 900 }: WorkerLayo
           {navItems.map((item) => {
             const active = item.key === activeTab;
             return (
-              <Link key={item.key} to={item.to} className="worker-bottom-nav__item">
+              <Link
+                key={item.key}
+                to={item.to}
+                className="worker-bottom-nav__item"
+                aria-current={active ? "page" : undefined}
+              >
                 {item.key === "home" ? <HomeIcon active={active} /> : null}
                 {item.key === "policy" ? <PolicyIcon active={active} /> : null}
                 {item.key === "claims" ? <ClaimsIcon active={active} /> : null}
