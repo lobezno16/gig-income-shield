@@ -135,6 +135,7 @@ export function WorkerShell({ activeTab, children, maxWidth = 920, pageTitle }: 
                   key={tab.key}
                   to={tab.to}
                   className={`worker-shell__desktop-link touch-target ${active ? "is-active" : ""}`}
+                  aria-current={active ? "page" : undefined}
                 >
                   <Icon size={16} />
                   <span>{tab.label}</span>
@@ -155,7 +156,12 @@ export function WorkerShell({ activeTab, children, maxWidth = 920, pageTitle }: 
             const Icon = tab.icon;
             const active = tab.key === activeTab;
             return (
-              <Link key={tab.key} to={tab.to} className="worker-shell__bottom-link touch-target">
+              <Link
+                key={tab.key}
+                to={tab.to}
+                className="worker-shell__bottom-link touch-target"
+                aria-current={active ? "page" : undefined}
+              >
                 <span className={`worker-shell__bottom-dot ${active ? "is-active" : ""}`} />
                 <Icon size={20} color={active ? "#5b4fff" : "#9a9a9a"} />
                 <span style={{ color: active ? "#5b4fff" : "#9a9a9a" }}>{tab.label}</span>
