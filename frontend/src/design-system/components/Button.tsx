@@ -25,7 +25,8 @@ export function Button({
         padding: "0 16px",
         fontFamily: "var(--font-display)",
         fontWeight: 700,
-        cursor: "pointer",
+        cursor: rest.disabled ? "not-allowed" : "pointer",
+        opacity: rest.disabled ? 0.5 : 1,
         ...style,
       }}
     >
