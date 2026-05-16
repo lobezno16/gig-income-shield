@@ -84,7 +84,7 @@ export function AdminLayout({ children }: PropsWithChildren) {
             })}
           </nav>
         </div>
-        <button type="button" className="admin-shell__logout touch-target" onClick={handleLogout}>
+        <button type="button" className="admin-shell__logout touch-target" onClick={handleLogout} aria-label="Logout">
           <LogOut size={16} />
           <span>Logout</span>
         </button>
