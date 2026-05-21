@@ -648,6 +648,7 @@ export function RegistrationPage() {
                   key={platform}
                   type="button"
                   className="touch-target"
+                  aria-pressed={selected}
                   onClick={() => patch({ platform })}
                   style={{
                     borderRadius: 8,
@@ -782,6 +783,7 @@ export function RegistrationPage() {
                   key={plan}
                   type="button"
                   className="touch-target"
+                  aria-pressed={selected}
                   onClick={() => patch({ plan })}
                   style={{
                     borderRadius: 8,
